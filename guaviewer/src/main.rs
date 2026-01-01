@@ -2,116 +2,68 @@ use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-// --- tcptdx integration ---
-//
-// This Slint app is intended to *consume* the `tcptdx` library.
-// The exact import path depends on how you expose items from the library.
-// The simplest setup is to re-export `FeedClient` and `KLine` from `tcptdx`'s lib.rs.
-//
-// If your paths differ, adjust the `use ...` lines below.
+// tcptdx library types (ensure your Cargo.toml includes the tcptdx crate)
 use tcptdx::{client::FeedClient, commands::KLine};
 
 slint::include_modules!();
 
-/// A single OHLCV candle used by the SVG renderer.
+/// Convert an SVG string into a raster `slint::Image` using the provided scale factor.
 ///
-/// This is deliberately UI-agnostic so we can later plug in `tcptdx::KLine` data
-/// without changing the rendering logic.
-#[derive(Clone, Debug)]
+/// Slint's built-in SVG support is limited depending on backend; rasterizing via `resvg`
+/// gives consistent rendering while still allowing you to implement zoom/pan by re-rendering
+/// at different scales.
+fn svg_to_image_with_scale(svg_content: &str, scale: f32) -> Result<Image, String> {
+    let opt = usvg::Options::default();
+    let tree = usvg::Tree::from_data(svg_content.as_bytes(), &opt)
+        .map_err(|e| format!("Invalid SVG: {e}"))?;
+
+    let size = tree.size();
+    let width = (size.width() * scale) as u32;
+    let height = (size.height() * scale) as u32;
+
+    if width == 0 || height == 0 {
+        return Err("SVG produced an empty image".to_string());
+    }
+
+    let mut pixmap = tiny_skia::Pixmap::new(width, height)
+        .ok_or_else(|| "Failed to create pixmap".to_string())?;
+
+    // Apply scaling transform
+    let transform = tiny_skia::Transform::from_scale(scale, scale);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+    // resvg outputs premultiplied BGRA; Slint expects RGBA
+    let mut rgba_bytes: Vec<u8> = Vec::with_capacity((width * height * 4) as usize);
+    for chunk in pixmap.data().chunks_exact(4) {
+        rgba_bytes.push(chunk[0]); // R
+        rgba_bytes.push(chunk[1]); // G
+        rgba_bytes.push(chunk[2]); // B
+        rgba_bytes.push(chunk[3]); // A
+    }
+
+    let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&rgba_bytes, width, height);
+    Ok(Image::from_rgba8(buffer))
+}
+
+/// A minimal candle model used by the SVG renderer.
+#[derive(Debug, Clone)]
 struct Candle {
     open: f64,
     high: f64,
     low: f64,
     close: f64,
     volume: f64,
-    /// Optional label (e.g. date). Only used by the "full" renderer.
+    /// Render-friendly date label (already formatted).
     label: String,
 }
 
-// /// Generate a small deterministic dataset so the UI can render *something*
-// /// before we wire the real `FeedClient` network fetch.
-// fn sample_candles(count: usize) -> Vec<Candle> {
-//     let mut out = Vec::with_capacity(count);
-//     let mut last_close = 100.0_f64;
-
-//     for i in 0..count {
-//         // A simple, deterministic pseudo-series (no randomness).
-//         let wave = ((i as f64) / 5.0).sin() * 2.0;
-//         let drift = (i as f64) * 0.05;
-//         let close = 100.0 + drift + wave;
-//         let open = last_close;
-//         let high = open.max(close) + 1.0 + (((i as f64) / 3.0).cos().abs() * 0.8);
-//         let low = open.min(close) - 1.0 - (((i as f64) / 4.0).sin().abs() * 0.8);
-//         let volume = 1000.0 + ((i as f64) * 37.0).sin().abs() * 800.0;
-
-//         out.push(Candle {
-//             open,
-//             high,
-//             low,
-//             close,
-//             volume,
-//             label: format!("#{}", i),
-//         });
-
-//         last_close = close;
-//     }
-
-//     out
-// }
-
-// /// Fetch KLine data from the TDX server using `tcptdx`, then map it into candles.
-// ///
-// /// Notes:
-// /// - `count` is limited by the protocol (usually max 800). We clamp defensively.
-// /// - The `label` field is only used by the "full" SVG renderer.
-// fn fetch_kline_as_candles(
-//     market: u16,
-//     code: &str,
-//     category: u16,
-//     start: u16,
-//     count: u16,
-// ) -> Result<Vec<Candle>, String> {
-//     // Defensive clamp (protocol max is commonly 800, see your `KLine` docs).
-//     let count = count.min(800);
-
-//     // Build request (your `KLine` is owned-string based, so this is cheap).
-//     let mut req = KLine::new(market, code.to_string(), category, start, count);
-
-//     // Create a client and perform the request.
-//     let mut client =
-//         FeedClient::new_default().map_err(|e| format!("FeedClient::new_default: {e}"))?;
-//     client
-//         .send(&mut req)
-//         .map_err(|e| format!("FeedClient::send: {e}"))?;
-
-//     // Map tcptdx's `KLineData` into our UI-agnostic candle type.
-//     // We keep a human-readable label for the X-axis in the full renderer.
-//     let mut out = Vec::with_capacity(req.data.len());
-//     for d in req.data.iter() {
-//         out.push(Candle {
-//             open: d.open,
-//             high: d.high,
-//             low: d.low,
-//             close: d.close,
-//             volume: d.vol,
-//             label: format!("{:?}", d.dt),
-//         });
-//     }
-//     Ok(out)
-// }
-//
-// /// Fetch KLine data from tcptdx and convert it into Candle structs.
+/// Fetch KLine data from tcptdx and convert it into candles.
 ///
-/// # Arguments
-/// * `market`   - Market ID (e.g. 0 = Shenzhen, 1 = Shanghai)
-/// * `code`     - Stock code (e.g. "000001")
-/// * `category` - KLine category (e.g. 9 = daily)
-/// * `start`    - Start index
-/// * `count`    - Number of KLine records to fetch
-///
-/// # Returns
-/// * `Ok(Vec<Candle>)` on success
-/// * `Err(String)` if network or protocol errors occur
+/// - `market`: market id (0 = Shenzhen, 1 = Shanghai)
+/// - `code`: 6-digit stock code (e.g. "000001")
+/// - `category`: kline category (e.g. 9 = daily)
+/// - `start`: start index
+/// - `count`: number of records (tcptdx max is typically 800)
 fn fetch_kline_as_candles(
     market: u16,
     code: &str,
@@ -127,7 +79,8 @@ fn fetch_kline_as_candles(
         .send(&mut req)
         .map_err(|e| format!("KLine fetch failed: {e}"))?;
 
-    Ok(req
+    // Map tcptdx records into our chart candles.
+    let candles = req
         .data
         .iter()
         .map(|rec| Candle {
@@ -136,424 +89,415 @@ fn fetch_kline_as_candles(
             low: rec.low as f64,
             close: rec.close as f64,
             volume: rec.vol as f64,
-            label: format!("{:?}", rec.dt).to_owned(), //rec.dt,
+            label: format!("{:04}-{:02}-{:02}", rec.dt.year, rec.dt.month, rec.dt.day),
         })
-        .collect())
-}
+        .collect::<Vec<_>>();
 
-fn f64_min_max(values: impl Iterator<Item = f64>) -> Option<(f64, f64)> {
-    let mut it = values;
-    let first = it.next()?;
-    let mut min_v = first;
-    let mut max_v = first;
-    for v in it {
-        if v < min_v {
-            min_v = v;
-        }
-        if v > max_v {
-            max_v = v;
-        }
+    if candles.is_empty() {
+        return Err("No KLine data returned".to_string());
     }
-    Some((min_v, max_v))
+
+    Ok(candles)
 }
 
-/// Render a simple OHLC candlestick chart as SVG.
+/// Render a simple OHLC candlestick chart into an SVG string.
 ///
-/// This renderer draws:
-/// - Candle bodies (open/close)
-/// - Wicks (high/low)
+/// This version draws:
+/// - Candle wick (high-low)
+/// - Candle body (open-close)
 ///
-/// It intentionally excludes:
-/// - Grid lines
-/// - Volume bars
-/// - Axis labels
-///
-/// This keeps the SVG lightweight and fast for transforms.
-fn render_svg_candles_simple(candles: &[Candle], width: u32, height: u32) -> String {
-    let (min_p, max_p) =
-        f64_min_max(candles.iter().flat_map(|c| [c.low, c.high].into_iter())).unwrap_or((0.0, 1.0));
+/// It intentionally omits:
+/// - Grid / axes
+/// - Labels
+/// - Volume
+fn render_svg_candles_simple(candles: &[Candle], width: i32, height: i32) -> String {
+    let pad_left = 20.0;
+    let pad_right = 20.0;
+    let pad_top = 20.0;
+    let pad_bottom = 20.0;
 
-    // Keep a small padding so wicks/bodies are not clipped.
-    let pad = 12.0_f64;
     let w = width as f64;
     let h = height as f64;
 
-    // Avoid division by zero if all prices are identical.
-    let span = (max_p - min_p).max(1e-9);
-    let price_to_y = |p: f64| -> f64 {
-        // SVG y grows downward.
-        pad + (max_p - p) / span * (h - pad * 2.0)
+    let min_price = candles.iter().map(|c| c.low).fold(f64::INFINITY, f64::min);
+    let max_price = candles
+        .iter()
+        .map(|c| c.high)
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    let price_range = (max_price - min_price).max(1e-9);
+
+    let plot_w = (w - pad_left - pad_right).max(1.0);
+    let plot_h = (h - pad_top - pad_bottom).max(1.0);
+
+    let n = candles.len().max(1) as f64;
+    let step = plot_w / n;
+    let body_w = (step * 0.65).max(1.0);
+
+    let y_of = |p: f64| -> f64 {
+        // higher price -> smaller y
+        pad_top + (max_price - p) / price_range * plot_h
     };
 
-    // Candle sizing.
-    let n = candles.len().max(1) as f64;
-    let step_x = (w - pad * 2.0) / n;
-    let body_w = (step_x * 0.65).max(2.0);
-
-    let mut svg = String::new();
-    svg.push_str(&format!(
-        r#"<svg xmlns="www.w3.org" width="{width}" height="{height}" viewBox="0 0 {width} {height}" fill="{color}">\n"#,
+    let mut out = String::new();
+    out.push_str(&format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" fill="{color}">"#,
         width = width,
         height = height,
         color = "#374151"
     ));
-    svg.push_str(r#"<rect x="0" y="0" width="100%" height="100%" fill="white"/>\n"#);
+
+    // Background
+    out.push_str(r#"<rect x="0" y="0" width="100%" height="100%" fill="white"/>"#);
 
     for (i, c) in candles.iter().enumerate() {
-        let cx = pad + (i as f64 + 0.5) * step_x;
-        let y_high = price_to_y(c.high);
-        let y_low = price_to_y(c.low);
-        let y_open = price_to_y(c.open);
-        let y_close = price_to_y(c.close);
+        let x_center = pad_left + (i as f64 + 0.5) * step;
+        let x0 = x_center - body_w / 2.0;
 
-        let is_up = c.close >= c.open;
-        let stroke = if is_up { "#16a34a" } else { "#dc2626" };
-        let fill = if is_up { "#22c55e" } else { "#ef4444" };
+        let y_high = y_of(c.high);
+        let y_low = y_of(c.low);
+        let y_open = y_of(c.open);
+        let y_close = y_of(c.close);
+
+        let bullish = c.close >= c.open;
+        let body_top = y_open.min(y_close);
+        let body_bot = y_open.max(y_close);
+        let body_h = (body_bot - body_top).max(1.0);
+
+        let fill = if bullish { "#2f9e44" } else { "#e03131" };
 
         // Wick
-        svg.push_str(&format!(
-            r#"<line x1="{cx:.2}" y1="{y_high:.2}" x2="{cx:.2}" y2="{y_low:.2}" stroke="{stroke}" stroke-width="1"/>\n"#
+        out.push_str(&format!(
+            r#"<line x1="{xc:.2}" y1="{yh:.2}" x2="{xc:.2}" y2="{yl:.2}" stroke="{color}" stroke-width="1"/>"#,
+            xc = x_center, yh = y_high, yl = y_low, color = "#333"
         ));
 
         // Body
-        let body_top = y_open.min(y_close);
-        let body_h = (y_open - y_close).abs().max(1.0);
-        let x = cx - body_w / 2.0;
-        svg.push_str(&format!(
-            r#"<rect x="{x:.2}" y="{body_top:.2}" width="{body_w:.2}" height="{body_h:.2}" fill="{fill}" stroke="{stroke}" stroke-width="1"/>\n"#
+        out.push_str(&format!(
+            r#"<rect x="{x0:.2}" y="{y:.2}" width="{w:.2}" height="{h:.2}" fill="{f}"/>"#,
+            x0 = x0,
+            y = body_top,
+            w = body_w,
+            h = body_h,
+            f = fill
         ));
+
+        // // X-Axis Labels (Every 10th candle)
+        // if i % 10 == 0 {
+        //     out.push_str(&format!(
+        //         r#"<text x="{xc:.2}" y="{ty:.2}" font-size="11" text-anchor="middle" fill="{color}">{label}</text>"#,
+        //         xc = x_center, ty = h - 5.0, color = "#666", label = c.label
+        //     ));
+        // }
     }
 
-    svg.push_str("</svg>\n");
-    svg
+    out.push_str("</svg>");
+    // println!("{:?}", out);
+    out
 }
 
-/// Render a candlestick chart with:
-/// - price grid
-/// - volume bars
-/// - basic labels
-fn render_svg_candles_full(candles: &[Candle], width: u32, height: u32) -> String {
+/// Render a fuller candlestick chart into an SVG string.
+///
+/// Adds:
+/// - Price grid lines + Y labels
+/// - Volume bars
+/// - Sparse X labels
+fn render_svg_candles_full(candles: &[Candle], width: i32, height: i32) -> String {
+    let pad_left = 60.0;
+    let pad_right = 20.0;
+    let pad_top = 20.0;
+    let pad_bottom = 30.0;
+
     let w = width as f64;
     let h = height as f64;
-    let pad = 16.0_f64;
-    let label_pad_left = 44.0_f64; // room for y-axis labels
-    let label_pad_bottom = 22.0_f64;
 
-    let chart_left = pad + label_pad_left;
-    let chart_right = w - pad;
-    let chart_top = pad;
-    let chart_bottom = h - pad - label_pad_bottom;
+    let vol_h = (h * 0.22).max(80.0);
+    let chart_h = (h - vol_h).max(200.0);
 
-    // Split into price + volume areas.
-    let price_h = (chart_bottom - chart_top) * 0.72;
-    let vol_h = (chart_bottom - chart_top) - price_h - 10.0;
-    let price_top = chart_top;
-    let price_bottom = price_top + price_h;
-    let vol_top = price_bottom + 10.0;
-    let vol_bottom = vol_top + vol_h;
+    let min_price = candles.iter().map(|c| c.low).fold(f64::INFINITY, f64::min);
+    let max_price = candles
+        .iter()
+        .map(|c| c.high)
+        .fold(f64::NEG_INFINITY, f64::max);
 
-    let (min_p, max_p) =
-        f64_min_max(candles.iter().flat_map(|c| [c.low, c.high].into_iter())).unwrap_or((0.0, 1.0));
-    let span_p = (max_p - min_p).max(1e-9);
-    let price_to_y =
-        |p: f64| -> f64 { price_top + (max_p - p) / span_p * (price_bottom - price_top) };
+    let price_range = (max_price - min_price).max(1e-9);
 
-    let (min_v, max_v) = f64_min_max(candles.iter().map(|c| c.volume)).unwrap_or((0.0, 1.0));
-    let span_v = (max_v - min_v).max(1e-9);
-    let vol_to_h = |v: f64| -> f64 { (v - min_v) / span_v * (vol_bottom - vol_top) };
+    let max_vol = candles
+        .iter()
+        .map(|c| c.volume)
+        .fold(0.0_f64, f64::max)
+        .max(1e-9);
+
+    let plot_w = (w - pad_left - pad_right).max(1.0);
+    let plot_h = (chart_h - pad_top - 10.0).max(1.0);
 
     let n = candles.len().max(1) as f64;
-    let step_x = (chart_right - chart_left) / n;
-    let body_w = (step_x * 0.65).max(2.0);
+    let step = plot_w / n;
+    let body_w = (step * 0.65).max(1.0);
 
-    let mut svg = String::new();
-    svg.push_str(&format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">\n"#
+    let y_of = |p: f64| -> f64 { pad_top + (max_price - p) / price_range * plot_h };
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">"#
     ));
-    svg.push_str(r#"<rect x="0" y="0" width="100%" height="100%" fill="white"/>\n"#);
 
-    // Grid (price area)
+    // Background
+    out.push_str(r#"<rect x="0" y="0" width="100%" height="100%" fill="white"/>"#);
+
+    // Price grid
     let grid_lines = 5;
     for i in 0..=grid_lines {
         let t = i as f64 / grid_lines as f64;
-        let y = price_top + t * (price_bottom - price_top);
-        svg.push_str(&format!(
-            r#"<line x1="{chart_left:.2}" y1="{y:.2}" x2="{chart_right:.2}" y2="{y:.2}" stroke="{color}" stroke-width="1"/>"#,
-            chart_left = chart_left,
-            chart_right = chart_right,
+        let price = max_price - t * price_range;
+        let y = y_of(price);
+
+        // 1. First Line
+        out.push_str(&format!(
+            r#"<line x1="{x1:.2}" y1="{y:.2}" x2="{x2:.2}" y2="{y:.2}" stroke="{color}" stroke-width="1"/>"#,
+            x1 = pad_left,
+            x2 = w - pad_right,
             y = y,
-            color = "#e5e7eb"
+            color = "#eee"
         ));
 
-        // Y-axis label
-        let p = max_p - t * span_p;
-        svg.push_str(&format!(
-            r#"<text x="{x:.2}" y="{y:.2}" font-size="11" text-anchor="end" dominant-baseline="middle" fill="{color}">{p:.2}</text>"#,
-            x = chart_left - 6.0,
-            y = y,
-            p = p,
-            color = "#374151"
+        // 2. Second Line
+        out.push_str(&format!(
+            r#"<text x="{tx:.2}" y="{ty:.2}" font-size="11" text-anchor="end" fill="{color}">{price:.2}</text>"#,
+            tx = pad_left - 8.0,
+            ty = y + 4.0,
+            price = price,
+            color = "#666"
         ));
     }
 
-    // Outer borders for price and volume panels.
-    svg.push_str(&format!(
-        r#"<rect x="{chart_left:.2}" y="{price_top:.2}" width="{pw:.2}" height="{ph:.2}" fill="none" stroke="{gray}" stroke-width="1"/>"#,
-        chart_left = chart_left,
-        price_top = price_top,
-        pw = chart_right - chart_left,
-        ph = price_bottom - price_top,
-        gray = "#d1d5db"
-    ));
-
-    svg.push_str(&format!(
-        r#"<rect x="{chart_left:.2}" y="{vol_top:.2}" width="{pw:.2}" height="{vh:.2}" fill="none" stroke="{gray}" stroke-width="1"/>"#,
-        chart_left = chart_left,
-        vol_top = vol_top,
-        pw = chart_right - chart_left,
-        vh = vol_bottom - vol_top,
-        gray = "#d1d5db"
-    ));
-
-    // Candles + volume
+    // Candles
     for (i, c) in candles.iter().enumerate() {
-        let cx = chart_left + (i as f64 + 0.5) * step_x;
-        let y_high = price_to_y(c.high);
-        let y_low = price_to_y(c.low);
-        let y_open = price_to_y(c.open);
-        let y_close = price_to_y(c.close);
+        let x_center = pad_left + (i as f64 + 0.5) * step;
+        let x0 = x_center - body_w / 2.0;
 
-        let is_up = c.close >= c.open;
-        let stroke = if is_up { "#16a34a" } else { "#dc2626" };
-        let fill = if is_up { "#22c55e" } else { "#ef4444" };
+        let y_high = y_of(c.high);
+        let y_low = y_of(c.low);
+        let y_open = y_of(c.open);
+        let y_close = y_of(c.close);
+
+        let bullish = c.close >= c.open;
+        let body_top = y_open.min(y_close);
+        let body_bot = y_open.max(y_close);
+        let body_h = (body_bot - body_top).max(1.0);
+
+        let fill = if bullish { "#2f9e44" } else { "#e03131" };
 
         // Wick
-        svg.push_str(&format!(
-            r#"<line x1="{cx:.2}" y1="{y_high:.2}" x2="{cx:.2}" y2="{y_low:.2}" stroke="{stroke}" stroke-width="1"/>\n"#
+        out.push_str(&format!(
+            r#"<line x1="{x_center:.2}" y1="{y_high:.2}" x2="{x_center:.2}" y2="{y_low:.2}" stroke="{color}" stroke-width="1"/>"#,
+            x_center = x_center,
+            y_high = y_high,
+            y_low = y_low,
+            color = "#333"
         ));
 
         // Body
-        let body_top = y_open.min(y_close);
-        let body_h = (y_open - y_close).abs().max(1.0);
-        let x = cx - body_w / 2.0;
-        svg.push_str(&format!(
-            r#"<rect x="{x:.2}" y="{body_top:.2}" width="{body_w:.2}" height="{body_h:.2}" fill="{fill}" stroke="{stroke}" stroke-width="1"/>\n"#
+        out.push_str(&format!(
+            r#"<rect x="{x0:.2}" y="{body_top:.2}" width="{body_w:.2}" height="{body_h:.2}" fill="{fill}"/>"#
         ));
-
-        // Volume bar
-        let v_h = vol_to_h(c.volume);
-        let v_y = vol_bottom - v_h;
-        svg.push_str(&format!(
-            r#"<rect x="{x:.2}" y="{v_y:.2}" width="{body_w:.2}" height="{v_h:.2}" fill="{fill_color}" opacity="0.7"/>"#,
-            x = x,
-            v_y = v_y,
-            body_w = body_w,
-            v_h = v_h,
-            fill_color = "#9ca3af"
-        ));
-
-        // X labels (sparse)
-        let every = (candles.len() / 6).max(1);
-        if i % every == 0 {
-            svg.push_str(&format!(
-                r#"<text x="{cx:.2}" y="{y:.2}" font-size="11" text-anchor="middle" fill="{fill}">{label}</text>"#,
-                cx = cx,
-                y = h - pad,
-                label = c.label,
-                fill = "#374151"
-            ));
-        }
     }
 
-    // Title-like caption
-    svg.push_str(&format!(
-        r#"<text x="{x:.2}" y="{y:.2}" font-size="13" font-weight="600" fill="{color}">Candles (price + volume)</text>"#,
-        x = chart_left,
-        y = 14.0,
-        color = "#111827"
-    ));
+    // Volume bars
+    let vol_top = chart_h;
+    let vol_base = h - pad_bottom;
+    for (i, c) in candles.iter().enumerate() {
+        let x_center = pad_left + (i as f64 + 0.5) * step;
+        let x0 = x_center - body_w / 2.0;
 
-    svg.push_str("</svg>\n");
-    svg
+        let vh = (c.volume / max_vol) * (vol_base - vol_top);
+        let y = vol_base - vh;
+
+        let bullish = c.close >= c.open;
+        let fill = if bullish { "#2f9e44" } else { "#e03131" };
+
+        out.push_str(&format!(
+            r#"<rect x="{x0:.2}" y="{y:.2}" width="{body_w:.2}" height="{vh:.2}" fill="{fill}" opacity="0.35"/>"#
+        ));
+    }
+
+    // Sparse X labels
+    let label_step = (candles.len() / 6).max(1);
+    for i in (0..candles.len()).step_by(label_step) {
+        let x_center = pad_left + (i as f64 + 0.5) * step;
+        let text_y = h - 10.0;
+        out.push_str(&format!(
+            r#"<text x="{x:.2}" y="{y:.2}" font-size="11" text-anchor="middle" fill="{color}">{label}</text>"#,
+            x = x_center,
+            y = text_y,
+            color = "#666",
+            label = candles[i].label
+        ));
+    }
+
+    out.push_str("</svg>");
+    out
 }
 
-fn svg_to_image_with_scale(svg_content: &str, scale: f32) -> Option<Image> {
-    let opt = usvg::Options::default();
-    let tree = usvg::Tree::from_data(svg_content.as_bytes(), &opt).ok()?;
-
-    let size = tree.size();
-    let width = (size.width() * scale) as u32;
-    let height = (size.height() * scale) as u32;
-
-    // Ensure minimum size
-    if width == 0 || height == 0 {
-        return None;
-    }
-
-    let mut pixmap = tiny_skia::Pixmap::new(width, height)?;
-
-    // Apply scaling transform
-    let transform = tiny_skia::Transform::from_scale(scale, scale);
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
-
-    // Convert BGRA to RGBA - create vec of u8 values directly
-    let mut rgba_bytes: Vec<u8> = Vec::with_capacity((width * height * 4) as usize);
-    for chunk in pixmap.data().chunks_exact(4) {
-        rgba_bytes.push(chunk[0]); // R
-        rgba_bytes.push(chunk[1]); // G
-        rgba_bytes.push(chunk[2]); // B
-        rgba_bytes.push(chunk[3]); // A
-    }
-
-    let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&rgba_bytes, width, height);
-    Some(Image::from_rgba8(buffer))
+/// Parse a `u16` from a Slint `string` field, with a nice error message.
+///
+/// This keeps UI parsing code tidy and ensures all numeric input errors look consistent.
+fn parse_u16(field_name: &str, text: slint::SharedString) -> Result<u16, String> {
+    text.trim()
+        .parse::<u16>()
+        .map_err(|_| format!("{field_name} must be a u16 (got '{text}')"))
 }
 
 fn main() -> Result<(), slint::PlatformError> {
     let ui = AppWindow::new()?;
 
-    let default_svg = r#"<svg width="200" height="200" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="100" cy="100" r="80" fill="blue" stroke="black" stroke-width="2"/>
-        <rect x="70" y="70" width="60" height="60" fill="yellow" opacity="0.7"/>
-        <polygon points="100,40 120,80 80,80" fill="red"/>
-    </svg>"#;
-
-    // Store the current scale factor, position, and SVG content
+    // Store current scale, position, and SVG content (so zoom/pan can re-render consistently).
     let scale = Rc::new(RefCell::new(1.0f32));
     let position_x = Rc::new(RefCell::new(0.0f32));
-    let current_svg_content = Rc::new(RefCell::new(default_svg.to_string()));
+    let current_svg_content = Rc::new(RefCell::new(String::new()));
 
-    // Set initial SVG content in the text area and set up monitoring
-    ui.set_svg_input(default_svg.into());
-
-    // Monitor for changes in the SVG input using a timer-based approach
+    // Reload / Refresh: fetch KLine -> render SVG -> rasterize -> show
     {
         let ui_weak = ui.as_weak();
         let scale = scale.clone();
         let current_svg_content = current_svg_content.clone();
-        let last_svg_content = Rc::new(RefCell::new(default_svg.to_string()));
 
-        let timer = slint::Timer::default();
-        timer.start(
-            slint::TimerMode::Repeated,
-            std::time::Duration::from_millis(500),
-            move || {
-                if let Some(ui) = ui_weak.upgrade() {
-                    let new_svg = ui.get_svg_input().to_string();
-                    let last_content = last_svg_content.borrow().clone();
+        ui.on_reload_kline(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
 
-                    // Only update if content has changed
-                    if new_svg != last_content && !new_svg.trim().is_empty() {
-                        let current_scale = *scale.borrow();
-
-                        match svg_to_image_with_scale(&new_svg, current_scale) {
-                            Some(image) => {
-                                // Update the stored SVG content
-                                *current_svg_content.borrow_mut() = new_svg.clone();
-                                *last_svg_content.borrow_mut() = new_svg;
-
-                                // Update image with current scale
-                                ui.set_svg_image(image);
-                                ui.set_svg_status("SVG updated".into());
-                            }
-                            None => {
-                                *last_svg_content.borrow_mut() = new_svg;
-                                ui.set_svg_status("Error: Invalid SVG".into());
-                            }
-                        }
-                    } else if new_svg.trim().is_empty() && new_svg != last_content {
-                        *last_svg_content.borrow_mut() = new_svg;
-                        ui.set_svg_status("Empty SVG content".into());
-                    }
+            // Parse inputs
+            let market = match parse_u16("market", ui.get_market_input()) {
+                Ok(v) => v,
+                Err(e) => {
+                    ui.set_svg_status(format!("Error: {e}").into());
+                    return;
                 }
-            },
-        );
-    }
+            };
 
-    // Set initial image
-    if let Some(image) = svg_to_image_with_scale(&current_svg_content.borrow(), *scale.borrow()) {
-        ui.set_svg_image(image);
-    }
+            let code = ui.get_code_input().to_string();
+            if code.len() != 6 {
+                ui.set_svg_status("Error: code must be 6 characters (e.g. 000001)".into());
+                return;
+            }
 
-    // Set initial scale display
-    ui.set_current_scale(format!("Scale: {:.1}x", *scale.borrow()).into());
-    ui.set_image_x_offset((*position_x.borrow() as f32) * 1.0);
+            let category = match parse_u16("category", ui.get_category_input()) {
+                Ok(v) => v,
+                Err(e) => {
+                    ui.set_svg_status(format!("Error: {e}").into());
+                    return;
+                }
+            };
 
-    // Handle SVG content changes manually with update button
-    {
-        let ui_weak = ui.as_weak();
-        let scale = scale.clone();
-        let current_svg_content = current_svg_content.clone();
+            let start = match parse_u16("start", ui.get_start_input()) {
+                Ok(v) => v,
+                Err(e) => {
+                    ui.set_svg_status(format!("Error: {e}").into());
+                    return;
+                }
+            };
 
-        ui.on_svg_content_changed(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                let new_svg = ui.get_svg_input().to_string();
+            let count = match parse_u16("count", ui.get_count_input()) {
+                Ok(v) => v,
+                Err(e) => {
+                    ui.set_svg_status(format!("Error: {e}").into());
+                    return;
+                }
+            };
 
-                // Only update if content is not empty
-                if !new_svg.trim().is_empty() {
-                    let current_scale = *scale.borrow();
+            // Enforce protocol limit (tcptdx typically caps at 800)
+            let count = count.min(800);
 
-                    match svg_to_image_with_scale(&new_svg, current_scale) {
-                        Some(image) => {
-                            // Update the stored SVG content
-                            *current_svg_content.borrow_mut() = new_svg;
+            // Fetch
+            let candles = match fetch_kline_as_candles(market, &code, category, start, count) {
+                Ok(c) => c,
+                Err(e) => {
+                    ui.set_svg_status(format!("Error: {e}").into());
+                    return;
+                }
+            };
 
-                            // Update image with current scale
-                            ui.set_svg_image(image);
-                            ui.set_svg_status("SVG updated manually".into());
-                        }
-                        None => {
-                            ui.set_svg_status("Error: Invalid SVG".into());
-                        }
-                    }
-                } else {
-                    ui.set_svg_status("Empty SVG content".into());
+            // Render SVG
+            let full_render = ui.get_full_render();
+            let svg = if full_render {
+                render_svg_candles_full(&candles, 900, 520)
+            } else {
+                render_svg_candles_simple(&candles, 900, 420)
+            };
+
+            // Store the SVG so zoom can re-render at the new scale
+            *current_svg_content.borrow_mut() = svg;
+
+            // Rasterize at current scale and show
+            let current_scale = *scale.borrow();
+            match svg_to_image_with_scale(&current_svg_content.borrow(), current_scale) {
+                Ok(image) => {
+                    ui.set_svg_image(image);
+                    ui.set_svg_status(format!("Loaded {} candles", candles.len()).into());
+                }
+                Err(e) => {
+                    ui.set_svg_status(format!("Error: {e}").into());
                 }
             }
         });
     }
 
-    // Handle scale up button
+    // Scale Up
     {
         let ui_weak = ui.as_weak();
         let scale = scale.clone();
         let current_svg_content = current_svg_content.clone();
         ui.on_scale_up(move || {
             let mut current_scale = scale.borrow_mut();
-            *current_scale = (*current_scale * 1.2).min(5.0); // Increase by 20%, max 5x
+            *current_scale = (*current_scale * 1.2).min(5.0);
 
             if let Some(ui) = ui_weak.upgrade() {
-                if let Some(image) =
-                    svg_to_image_with_scale(&current_svg_content.borrow(), *current_scale)
-                {
-                    ui.set_svg_image(image);
+                if current_svg_content.borrow().is_empty() {
+                    ui.set_svg_status("No chart loaded".into());
                     ui.set_current_scale(format!("Scale: {:.1}x", *current_scale).into());
+                    return;
+                }
+
+                match svg_to_image_with_scale(&current_svg_content.borrow(), *current_scale) {
+                    Ok(image) => {
+                        ui.set_svg_image(image);
+                        ui.set_current_scale(format!("Scale: {:.1}x", *current_scale).into());
+                    }
+                    Err(e) => ui.set_svg_status(format!("Error: {e}").into()),
                 }
             }
         });
     }
 
-    // Handle scale down button
+    // Scale Down
     {
         let ui_weak = ui.as_weak();
         let scale = scale.clone();
         let current_svg_content = current_svg_content.clone();
         ui.on_scale_down(move || {
             let mut current_scale = scale.borrow_mut();
-            *current_scale = (*current_scale / 1.2).max(0.2); // Decrease by 20%, min 0.2x
+            *current_scale = (*current_scale / 1.2).max(0.2);
 
             if let Some(ui) = ui_weak.upgrade() {
-                if let Some(image) =
-                    svg_to_image_with_scale(&current_svg_content.borrow(), *current_scale)
-                {
-                    ui.set_svg_image(image);
+                if current_svg_content.borrow().is_empty() {
+                    ui.set_svg_status("No chart loaded".into());
                     ui.set_current_scale(format!("Scale: {:.1}x", *current_scale).into());
+                    return;
+                }
+
+                match svg_to_image_with_scale(&current_svg_content.borrow(), *current_scale) {
+                    Ok(image) => {
+                        ui.set_svg_image(image);
+                        ui.set_current_scale(format!("Scale: {:.1}x", *current_scale).into());
+                    }
+                    Err(e) => ui.set_svg_status(format!("Error: {e}").into()),
                 }
             }
         });
     }
 
-    // Handle reset button
+    // Reset View
     {
         let ui_weak = ui.as_weak();
         let scale = scale.clone();
@@ -566,124 +510,50 @@ fn main() -> Result<(), slint::PlatformError> {
             *current_pos_x = 0.0;
 
             if let Some(ui) = ui_weak.upgrade() {
-                if let Some(image) =
-                    svg_to_image_with_scale(&current_svg_content.borrow(), *current_scale)
-                {
-                    ui.set_svg_image(image);
-                    ui.set_current_scale(format!("Scale: {:.1}x", *current_scale).into());
-                    ui.set_image_x_offset(*current_pos_x);
-                    ui.set_target_x_offset(*current_pos_x);
+                ui.set_current_scale(format!("Scale: {:.1}x", *current_scale).into());
+                ui.set_target_x_offset(*current_pos_x);
+
+                if current_svg_content.borrow().is_empty() {
+                    ui.set_svg_status("No chart loaded".into());
+                    return;
+                }
+
+                match svg_to_image_with_scale(&current_svg_content.borrow(), *current_scale) {
+                    Ok(image) => ui.set_svg_image(image),
+                    Err(e) => ui.set_svg_status(format!("Error: {e}").into()),
                 }
             }
         });
     }
 
-    // Handle swipe left
+    // Swipe Left
     {
         let ui_weak = ui.as_weak();
         let position_x = position_x.clone();
         ui.on_swipe_left(move || {
             let mut current_pos_x = position_x.borrow_mut();
-            *current_pos_x -= 100.0; // Move left by 100px
-
+            *current_pos_x -= 100.0;
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_target_x_offset(*current_pos_x);
             }
         });
     }
 
-    // Handle swipe right
+    // Swipe Right
     {
         let ui_weak = ui.as_weak();
         let position_x = position_x.clone();
         ui.on_swipe_right(move || {
             let mut current_pos_x = position_x.borrow_mut();
-            *current_pos_x += 100.0; // Move right by 100px
-
+            *current_pos_x += 100.0;
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_target_x_offset(*current_pos_x);
             }
         });
     }
 
-    // Handle KLine reload/refresh button (fetch + SVG generation, end-to-end)
-    {
-        let ui_weak = ui.as_weak();
-        ui.on_reload_kline(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                let market = ui.get_market_input().trim().parse::<u16>();
-                let category = ui.get_category_input().trim().parse::<u16>();
-                let start = ui.get_start_input().trim().parse::<u16>();
-                let count = ui.get_count_input().trim().parse::<u16>();
-                let code = ui.get_code_input().trim().to_string();
-                let full_render = ui.get_full_render();
-
-                match (market, category, start, count) {
-                    (Ok(market), Ok(category), Ok(start), Ok(count)) => {
-                        // Fetch real KLine data via tcptdx.
-                        // match fetch_kline_as_candles(market, &code, category, start, count) {
-                        //     Ok(candles) => {
-                        //         if candles.is_empty() {
-                        //             ui.set_svg_status("No data returned".into());
-                        //             return;
-                        //         }
-
-                        //         let svg = if full_render {
-                        //             render_svg_candles_full(&candles, 900, 520)
-                        //         } else {
-                        //             render_svg_candles_simple(&candles, 900, 420)
-                        //         };
-
-                        //         // Setting svg-input will trigger the existing timer-based renderer.
-                        //         ui.set_svg_input(svg.into());
-                        //         ui.set_svg_status(
-                        //             format!(
-                        //                 "Rendered {} candles (market={} code={} category={} start={} count={})",
-                        //                 candles.len(), market, code, category, start, count
-                        //             )
-                        //             .into(),
-                        //         );
-                        //     }
-                        //     Err(err) => {
-                        //         // Fallback: keep the UI responsive even if networking fails.
-                        //         // You can remove this fallback once your network layer is stable.
-                        //         let candles = sample_candles(count as usize);
-                        //         let svg = if full_render {
-                        //             render_svg_candles_full(&candles, 900, 520)
-                        //         } else {
-                        //             render_svg_candles_simple(&candles, 900, 420)
-                        //         };
-                        //         ui.set_svg_input(svg.into());
-                        //         ui.set_svg_status(format!("Fetch failed: {err} (showing sample data)").into());
-                        //     }
-                        // }
-                        match fetch_kline_as_candles(market, &code, category, start, count) {
-                            Ok(candles) => {
-                                let svg = if full_render {
-                                    render_svg_candles_full(&candles, 900, 520)
-                                } else {
-                                    render_svg_candles_simple(&candles, 900, 420)
-                                };
-                                ui.set_svg_input(svg.into());
-                                ui.set_svg_status(
-                                    format!("Loaded {} candles", candles.len()).into(),
-                                );
-                            }
-                            Err(err) => {
-                                ui.set_svg_input("".into());
-                                ui.set_svg_status(format!("Error: {err}").into());
-                            }
-                        }
-                    }
-                    _ => {
-                        ui.set_svg_status(
-                            "Invalid input: market/category/start/count must be u16".into(),
-                        );
-                    }
-                }
-            }
-        });
-    }
+    // Initialize scale display
+    ui.set_current_scale("Scale: 1.0x".into());
 
     ui.run()
 }

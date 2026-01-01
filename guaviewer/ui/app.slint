@@ -1,5 +1,4 @@
-import { VerticalBox, HorizontalBox, Button, TextEdit, ScrollView, CheckBox } from "std-widgets.slint";
-
+import { VerticalBox, HorizontalBox, Button, TextEdit, CheckBox } from "std-widgets.slint";
 
 component ToolTipArea {
     in property <string> text;
@@ -10,24 +9,38 @@ component ToolTipArea {
     // The actual content (your CheckBox will go here)
     @children
 
-    // The Tooltip popup
+    // Tooltip popup
     if ta.has-hover: Rectangle {
         background: #333;
         border-radius: 4px;
         x: ta.mouse-x + 10px;
         y: ta.mouse-y + 10px;
-        z: 100; // Ensure it stays on top
+        z: 100;
 
         Text {
             text: root.text;
             color: white;
-            // padding: 4px;
+            font-size: 12px;
+            x: 6px;
+            y: 4px;
+        }
+
+        // A little padding
+        width: tooltip_text.width + 12px;
+        height: tooltip_text.height + 8px;
+
+        tooltip_text := Text {
+            text: root.text;
+            color: white;
+            font-size: 12px;
+            x: 6px;
+            y: 4px;
         }
     }
 }
 
 export component AppWindow inherits Window {
-    title: "SVG Viewer with Custom Input";
+    title: "Gua KLine Viewer";
     width: 1000px;
     height: 900px;
 
@@ -35,15 +48,14 @@ export component AppWindow inherits Window {
     in-out property <string> current-scale: "Scale: 1.0x";
     in-out property <length> image-x-offset: 0px;
     in-out property <length> target-x-offset: 0px;
-    in-out property <string> svg-input;
     in-out property <string> svg-status: "Ready";
 
-    // KLine query inputs (these are parsed in Rust)
+    // KLine query inputs (parsed in Rust)
     in-out property <string> market-input: "0";
     in-out property <string> code-input: "000001";
     in-out property <string> category-input: "9";
     in-out property <string> start-input: "0";
-    in-out property <string> count-input: "1";
+    in-out property <string> count-input: "100";
     in-out property <bool> full-render: false;
 
     callback reload-kline();
@@ -53,7 +65,6 @@ export component AppWindow inherits Window {
     callback reset-scale();
     callback swipe-left();
     callback swipe-right();
-    callback svg-content-changed();
 
     // Animation for smooth position changes
     animate target-x-offset {
@@ -66,7 +77,7 @@ export component AppWindow inherits Window {
         spacing: 15px;
 
         Text {
-            text: "SVG Viewer with Custom Input";
+            text: "Gua KLine Viewer";
             font-size: 20px;
             font-weight: 600;
             horizontal-alignment: center;
@@ -153,7 +164,7 @@ export component AppWindow inherits Window {
                     width: 80px;
                     height: 30px;
                     text <=> root.count-input;
-                    placeholder-text: "1";
+                    placeholder-text: "100";
                 }
 
                 ToolTipArea {
@@ -161,7 +172,6 @@ export component AppWindow inherits Window {
                     CheckBox {
                         text: "Full render";
                         checked <=> root.full-render;
-                        // tooltip: "Show volume + grid + labels";
                     }
                 }
 
@@ -172,60 +182,6 @@ export component AppWindow inherits Window {
                         root.reload-kline();
                     }
                 }
-            }
-        }
-
-        // SVG Input Section
-        VerticalBox {
-            spacing: 10px;
-
-            Text {
-                text: "SVG Content:";
-                font-size: 14px;
-                font-weight: 500;
-            }
-
-            VerticalBox {
-                spacing: 8px;
-
-                Text {
-                    text: "SVG Content - Edit directly in the text area below:";
-                    font-size: 12px;
-                    font-weight: 500;
-                    color: #333;
-                }
-
-                // Editable text area using TextEdit
-                Rectangle {
-                    height: 160px;
-                    border-radius: 6px;
-                    border-width: 1px;
-                    border-color: #ccc;
-                    background: white;
-
-                    TextEdit {
-                        text <=> root.svg-input;
-                        font-size: 11px;
-                        wrap: word-wrap;
-                        read-only: false;
-                        x: 5px;
-                        y: 5px;
-                        width: parent.width - 10px;
-                        height: parent.height - 10px;
-                    }
-                }
-            }
-
-            HorizontalBox {
-                spacing: 10px;
-
-                Button {
-                    text: "Update SVG";
-                    primary: true;
-                    clicked => {
-                        root.svg-content-changed();
-                    }
-                }
 
                 Button {
                     text: "Reset View";
@@ -233,25 +189,23 @@ export component AppWindow inherits Window {
                         root.reset-scale();
                     }
                 }
+            }
+
+            HorizontalBox {
+                spacing: 20px;
+                alignment: center;
+
+                Text {
+                    text: root.current-scale;
+                    font-size: 14px;
+                    color: #666;
+                }
 
                 Text {
                     text: root.svg-status;
                     font-size: 12px;
                     color: #666;
-                    vertical-alignment: center;
                 }
-            }
-        }
-
-        // Scale and Status
-        HorizontalBox {
-            spacing: 20px;
-            alignment: center;
-
-            Text {
-                text: root.current-scale;
-                font-size: 14px;
-                color: #666;
             }
         }
 
@@ -262,7 +216,7 @@ export component AppWindow inherits Window {
             border-color: #ddd;
             background: #f9f9f9;
             min-height: 300px;
-            clip: true; // Enable clipping to hide overflowing content
+            clip: true;
 
             // Touch area for swipe detection
             touch-area := TouchArea {
@@ -270,7 +224,6 @@ export component AppWindow inherits Window {
                 property <bool> is-swiping: false;
 
                 clicked => {
-                    // Record start position when pressed
                     if (!self.is-swiping) {
                         self.start-x = self.pressed-x;
                         self.is-swiping = true;
@@ -279,13 +232,10 @@ export component AppWindow inherits Window {
 
                 moved => {
                     if (self.pressed && self.is-swiping) {
-                        // Calculate swipe distance using mouse-x (current position)
                         if (self.mouse-x - self.start-x > 50px) {
-                            // Swipe right
                             root.swipe-right();
                             self.is-swiping = false;
                         } else if (self.start-x - self.mouse-x > 50px) {
-                            // Swipe left
                             root.swipe-left();
                             self.is-swiping = false;
                         }
@@ -456,13 +406,6 @@ export component AppWindow inherits Window {
                     }
                 }
             }
-        }
-
-        Text {
-            text: "Edit SVG content in the text area above. Changes update automatically every 0.5 seconds or use 'Update SVG'.";
-            font-size: 12px;
-            horizontal-alignment: center;
-            color: #888;
         }
     }
 }
