@@ -1,0 +1,14 @@
+[package]
+name = "guaviewer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+resvg = "0.45.1"
+slint = "1.14.1"
+tcptdx = {path = "../tcptdx"}
+tiny-skia = "0.11.4"
+usvg = "0.45.1"
+
+[build-dependencies]
+slint-build = "1.14.1"
