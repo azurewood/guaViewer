@@ -183,7 +183,10 @@ fn fetch_kline_as_candles(
             low: rec.low as f64,
             close: rec.close as f64,
             volume: rec.vol as f64,
-            label: format!("{:04}-{:02}-{:02}", rec.dt.year, rec.dt.month, rec.dt.day),
+            label: format!(
+                "{:04}-{:02}-{:02} {:02}:{:02}",
+                rec.dt.year, rec.dt.month, rec.dt.day, rec.dt.hour, rec.dt.minute
+            ),
         })
         .collect::<Vec<_>>();
 
@@ -249,9 +252,12 @@ fn render_svg_with_cursor(
 
     // Insert overlay just before </svg>
     let overlay = cursor_overlay_svg(candles, width, height, full_render, cursor);
+    // println!("{}", overlay);
     if let Some(idx) = svg.rfind("</svg>") {
         svg.insert_str(idx, &overlay);
     }
+    // println!();
+    // println!("{}", svg);
     svg
 }
 
@@ -333,42 +339,92 @@ fn cursor_overlay_svg(
     }
 
     let precision = auto_price_precision(min_price, max_price, 6);
-    let label = fmt_price(cursor.price, precision);
 
-    // Price label background box on the left axis
-    let label_w = pad_left - 6.0;
-    let label_h = 18.0;
-    let mut label_y = y - label_h / 2.0;
-    if label_y < 2.0 {
-        label_y = 2.0;
-    }
-    if label_y + label_h > h - 2.0 {
-        label_y = h - 2.0 - label_h;
+    // --- Horizontal cursor: show the price label just LEFT of the crossing.
+    let cross_label = fmt_price(cursor.price, precision);
+    let cross_label_h = 18.0;
+    let cross_label_w = (cross_label.len() as f64 * 7.0 + 12.0).max(44.0);
+    let cross_label_y = y - cross_label_h / 2.0;
+    // cross_label_y = cross_label_y.clamp(y_top, y_bottom - cross_label_h);
+    let mut cross_label_x = x_center - 8.0 - cross_label_w;
+    cross_label_x = cross_label_x.clamp(pad_left, pad_left + plot_w - cross_label_w);
+
+    // --- Vertical cursor: show candle OHLC + date in a compact box on the RIGHT side.
+    let c = &candles[idx];
+    let lines = [
+        c.label.clone(),
+        format!("O {}", fmt_price(c.open, precision)),
+        format!("H {}", fmt_price(c.high, precision)),
+        format!("L {}", fmt_price(c.low, precision)),
+        format!("C {}", fmt_price(c.close, precision)),
+        format!("V {}", fmt_price(c.volume, precision)),
+    ];
+    let max_chars = lines.iter().map(|s| s.chars().count()).max().unwrap_or(1) as f64;
+    let info_pad = 10.0;
+    let info_line_h = 14.0;
+    let info_box_w = (max_chars * 7.0 + info_pad * 2.0).max(120.0);
+    let info_box_h = info_pad + info_line_h * (lines.len() as f64) + 2.0;
+    // let info_x = (w - 6.0 - info_box_w).clamp(pad_left, w - 6.0 - info_box_w);
+    let info_y = (y_top + 1.0).clamp(2.0, (h - 2.0 - info_box_h).max(2.0));
+
+    // Build multi-line <text> using <tspan> so it works reliably in SVG.
+    let mut tspans = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        if i == 0 {
+            tspans.push_str(&format!(
+                r#"<tspan x="{tx:.2}" dy="0" fill="{color}">{line}</tspan>"#,
+                tx = x_center + info_box_w + 1.0, //w - 10.0,
+                line = line,
+                color = "#374151"
+            ));
+        } else {
+            tspans.push_str(&format!(
+                r#"<tspan x="{tx:.2}" dy="{dy:.2}" fill="{color}">{line}</tspan>"#,
+                tx = x_center + info_box_w + 1.0, //w - 10.0,
+                dy = info_line_h,
+                line = line,
+                color = "#374151"
+            ));
+        }
     }
 
     format!(
         r#"<g id="cursor-overlay">
             <line x1="{x:.2}" y1="{y1:.2}" x2="{x:.2}" y2="{y2:.2}" stroke="{c_gray}" stroke-width="1" stroke-dasharray="4 3" />
             <line x1="{x0:.2}" y1="{y:.2}" x2="{x1:.2}" y2="{y:.2}" stroke="{c_gray}" stroke-width="1" stroke-dasharray="4 3" />
-            <rect x="2" y="{ly:.2}" width="{lw:.2}" height="{lh:.2}" rx="3" ry="3" fill="{c_white}" opacity="0.85" stroke="{c_border}" />
-            <text x="{tx:.2}" y="{ty:.2}" font-size="11" text-anchor="end" fill="{c_text}">{label}</text>
+
+            <!-- Horizontal cursor price label (left of crossing) -->
+            <rect x="{clx:.2}" y="{cly:.2}" width="{clw:.2}" height="{clh:.2}" rx="3" ry="3" fill="{c_white}" opacity="0.62" stroke="{c_border}" />
+            <text x="{cltx:.2}" y="{clty:.2}" font-size="11" text-anchor="end" fill="{c_text}">{cross}</text>
+
+            <!-- Candle OHLC + date (right side) -->
+            <rect x="{ix:.2}" y="{iy:.2}" width="{iw:.2}" height="{ih:.2}" rx="4" ry="4" fill="{c_white}" opacity="0.72" stroke="{c_border}" />
+            <text x="{itx:.2}" y="{ity:.2}" font-size="12" text-anchor="end" fill="{c_text}" font-family="monospace">{tspans}</text>
         </g>"#,
         x = x_center,
         y1 = y_top,
         y2 = y_bottom,
-        x0 = 2.0,
+        x0 = pad_left,
         x1 = pad_left + plot_w,
         y = y,
-        ly = label_y,
-        lw = label_w.max(10.0),
-        lh = label_h,
-        tx = (pad_left - 6.0).max(8.0),
-        ty = y + 4.0,
-        label = label,
+        clx = cross_label_x,
+        cly = cross_label_y,
+        clw = cross_label_w,
+        clh = cross_label_h,
+        cltx = cross_label_x + cross_label_w - 6.0,
+        clty = y + 4.0,
+        cross = cross_label,
+        ix = x_center + 6.0, //info_x,
+        iy = info_y,
+        iw = info_box_w,
+        ih = info_box_h,
+        itx = x_center + info_box_w - 10.0, //w - 10.0,
+        ity = info_y + info_pad + 2.0,
+        tspans = tspans,
         c_gray = "#888",
         c_white = "#fff",
         c_border = "#aaa",
-        c_text = "#333"
+        c_text = "#333",
     )
 }
 
