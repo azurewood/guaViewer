@@ -95,7 +95,7 @@ export component AppWindow inherits Window {
 
             // Row 1: market + code
             HorizontalBox {
-                spacing: 10px;
+                spacing: 20px;
 
                 Text {
                     text: "market (u16)";
@@ -105,7 +105,7 @@ export component AppWindow inherits Window {
 
                 TextEdit {
                     width: 80px;
-                    height: 30px;
+                    height: 35px;
                     text <=> root.market-input;
                     placeholder-text: "0";
                 }
@@ -118,15 +118,10 @@ export component AppWindow inherits Window {
 
                 TextEdit {
                     width: 120px;
-                    height: 30px;
+                    height: 35px;
                     text <=> root.code-input;
                     placeholder-text: "000001";
                 }
-            }
-
-            // Row 2: category + start + count + render mode + reload
-            HorizontalBox {
-                spacing: 10px;
 
                 Text {
                     text: "category (u16)";
@@ -136,10 +131,28 @@ export component AppWindow inherits Window {
 
                 TextEdit {
                     width: 80px;
-                    height: 30px;
+                    height: 35px;
                     text <=> root.category-input;
                     placeholder-text: "9";
                 }
+            }
+
+            // Row 2: category + start + count + render mode + reload
+            HorizontalBox {
+                spacing: 20px;
+
+                // Text {
+                //     text: "category (u16)";
+                //     font-size: 12px;
+                //     vertical-alignment: center;
+                // }
+
+                // TextEdit {
+                //     width: 80px;
+                //     height: 30px;
+                //     text <=> root.category-input;
+                //     placeholder-text: "9";
+                // }
 
                 Text {
                     text: "start (u16)";
@@ -149,7 +162,7 @@ export component AppWindow inherits Window {
 
                 TextEdit {
                     width: 80px;
-                    height: 30px;
+                    height: 35px;
                     text <=> root.start-input;
                     placeholder-text: "0";
                 }
@@ -162,7 +175,7 @@ export component AppWindow inherits Window {
 
                 TextEdit {
                     width: 80px;
-                    height: 30px;
+                    height: 35px;
                     text <=> root.count-input;
                     placeholder-text: "100";
                 }

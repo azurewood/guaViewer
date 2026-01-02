@@ -1,5 +1,6 @@
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 use std::cell::RefCell;
+use std::fmt;
 use std::rc::Rc;
 
 // tcptdx library types (ensure your Cargo.toml includes the tcptdx crate)
@@ -7,26 +8,89 @@ use tcptdx::{client::FeedClient, commands::KLine};
 
 slint::include_modules!();
 
+/// Application-level errors with structured variants.
+///
+/// This keeps error handling explicit and avoids passing around ad-hoc `String`s.
+/// In UI code we format these errors via `Display` and show them in `svg-status`.
+#[derive(Debug)]
+enum AppError {
+    /// A user input field could not be parsed into the expected type.
+    ParseU16 { field: &'static str, value: String },
+
+    /// The SVG string could not be parsed by `usvg`.
+    InvalidSvg { message: String },
+
+    /// The SVG produced a zero-sized output (width or height became 0).
+    EmptySvgImage,
+
+    /// Failed to allocate the raster pixmap buffer.
+    PixmapAllocFailed,
+
+    /// Failed to initialize the TCP TDX client.
+    ClientInit { message: String },
+
+    /// Failed to fetch KLine data over the network.
+    FetchKLine { message: String },
+
+    /// The server returned no data for the given query.
+    NoKLineData,
+}
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppError::ParseU16 { field, value } => {
+                write!(f, "{field} must be a u16 (got '{value}')")
+            }
+            AppError::InvalidSvg { message } => write!(f, "Invalid SVG: {message}"),
+            AppError::EmptySvgImage => write!(f, "SVG produced an empty image"),
+            AppError::PixmapAllocFailed => write!(f, "Failed to allocate pixmap buffer"),
+            AppError::ClientInit { message } => write!(f, "FeedClient init failed: {message}"),
+            AppError::FetchKLine { message } => write!(f, "KLine fetch failed: {message}"),
+            AppError::NoKLineData => write!(f, "No KLine data returned"),
+        }
+    }
+}
+
+impl std::error::Error for AppError {}
+
+/// Parse a `u16` from a Slint string field.
+///
+/// This returns a structured `AppError::ParseU16` which retains field context.
+fn parse_u16(field: &'static str, text: slint::SharedString) -> Result<u16, AppError> {
+    let trimmed = text.trim();
+    trimmed.parse::<u16>().map_err(|_| AppError::ParseU16 {
+        field,
+        value: text.to_string(),
+    })
+}
+
 /// Convert an SVG string into a raster `slint::Image` using the provided scale factor.
 ///
 /// Slint's built-in SVG support is limited depending on backend; rasterizing via `resvg`
 /// gives consistent rendering while still allowing you to implement zoom/pan by re-rendering
 /// at different scales.
-fn svg_to_image_with_scale(svg_content: &str, scale: f32) -> Result<Image, String> {
+fn svg_to_image_with_scale(svg_content: &str, scale: f32) -> Result<Image, AppError> {
     let opt = usvg::Options::default();
-    let tree = usvg::Tree::from_data(svg_content.as_bytes(), &opt)
-        .map_err(|e| format!("Invalid SVG: {e}"))?;
+    // let tree = usvg::Tree::from_data(svg_content.as_bytes(), &opt)
+    //     .map_err(|e| format!("Invalid SVG: {e}"))?;
+    let tree =
+        usvg::Tree::from_data(svg_content.as_bytes(), &opt).map_err(|e| AppError::InvalidSvg {
+            message: e.to_string(),
+        })?;
 
     let size = tree.size();
     let width = (size.width() * scale) as u32;
     let height = (size.height() * scale) as u32;
 
     if width == 0 || height == 0 {
-        return Err("SVG produced an empty image".to_string());
+        // return Err("SVG produced an empty image".to_string());
+        return Err(AppError::EmptySvgImage);
     }
 
-    let mut pixmap = tiny_skia::Pixmap::new(width, height)
-        .ok_or_else(|| "Failed to create pixmap".to_string())?;
+    // let mut pixmap = tiny_skia::Pixmap::new(width, height)
+    //     .ok_or_else(|| "Failed to create pixmap".to_string())?;
+    let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or(AppError::PixmapAllocFailed)?;
 
     // Apply scaling transform
     let transform = tiny_skia::Transform::from_scale(scale, scale);
@@ -70,14 +134,20 @@ fn fetch_kline_as_candles(
     category: u16,
     start: u16,
     count: u16,
-) -> Result<Vec<Candle>, String> {
+) -> Result<Vec<Candle>, AppError> {
     let mut req = KLine::new(market, code, category, start, count);
-    let mut client =
-        FeedClient::new_default().map_err(|e| format!("FeedClient init failed: {e}"))?;
+    // let mut client =
+    //     FeedClient::new_default().map_err(|e| format!("FeedClient init failed: {e}"))?;
+    let mut client = FeedClient::new_default().map_err(|e| AppError::ClientInit {
+        message: e.to_string(),
+    })?;
 
-    client
-        .send(&mut req)
-        .map_err(|e| format!("KLine fetch failed: {e}"))?;
+    // client
+    //     .send(&mut req)
+    //     .map_err(|e| format!("KLine fetch failed: {e}"))?;
+    client.send(&mut req).map_err(|e| AppError::FetchKLine {
+        message: e.to_string(),
+    })?;
 
     // Map tcptdx records into our chart candles.
     let candles = req
@@ -94,7 +164,8 @@ fn fetch_kline_as_candles(
         .collect::<Vec<_>>();
 
     if candles.is_empty() {
-        return Err("No KLine data returned".to_string());
+        // return Err("No KLine data returned".to_string());
+        return Err(AppError::NoKLineData);
     }
 
     Ok(candles)
@@ -313,8 +384,8 @@ fn render_svg_candles_full(candles: &[Candle], width: i32, height: i32) -> Strin
         let vh = (c.volume / max_vol) * (vol_base - vol_top);
         let y = vol_base - vh;
 
-        let bullish = c.close >= c.open;
-        let fill = if bullish { "#2f9e44" } else { "#e03131" };
+        // let bullish = c.close >= c.open;
+        let fill = "#d1d5db"; //if bullish { "#2f9e44" } else { "#e03131" };
 
         out.push_str(&format!(
             r#"<rect x="{x0:.2}" y="{y:.2}" width="{body_w:.2}" height="{vh:.2}" fill="{fill}" opacity="0.35"/>"#
@@ -339,14 +410,14 @@ fn render_svg_candles_full(candles: &[Candle], width: i32, height: i32) -> Strin
     out
 }
 
-/// Parse a `u16` from a Slint `string` field, with a nice error message.
-///
-/// This keeps UI parsing code tidy and ensures all numeric input errors look consistent.
-fn parse_u16(field_name: &str, text: slint::SharedString) -> Result<u16, String> {
-    text.trim()
-        .parse::<u16>()
-        .map_err(|_| format!("{field_name} must be a u16 (got '{text}')"))
-}
+// /// Parse a `u16` from a Slint `string` field, with a nice error message.
+// ///
+// /// This keeps UI parsing code tidy and ensures all numeric input errors look consistent.
+// fn parse_u16(field_name: &str, text: slint::SharedString) -> Result<u16, String> {
+//     text.trim()
+//         .parse::<u16>()
+//         .map_err(|_| format!("{field_name} must be a u16 (got '{text}')"))
+// }
 
 fn main() -> Result<(), slint::PlatformError> {
     let ui = AppWindow::new()?;
@@ -356,6 +427,9 @@ fn main() -> Result<(), slint::PlatformError> {
     let position_x = Rc::new(RefCell::new(0.0f32));
     let current_svg_content = Rc::new(RefCell::new(String::new()));
 
+    // Set initial scale display.
+    ui.set_current_scale(format!("Scale: {:.1}x", *scale.borrow()).into());
+    ui.set_image_x_offset((*position_x.borrow() as f32) * 1.0);
     // Reload / Refresh: fetch KLine -> render SVG -> rasterize -> show
     {
         let ui_weak = ui.as_weak();
