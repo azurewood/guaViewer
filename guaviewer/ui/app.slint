@@ -242,11 +242,29 @@ export component AppWindow inherits Window {
 
                 key-pressed(event) => {
                     if (event.text == Key.LeftArrow) {
-                        root.move-cursor-by(-1);
+                        if (event.modifiers.meta || event.modifiers.shift || event.modifiers.control) {
+                            root.move-cursor-by(-10);
+                        } else {
+                            root.move-cursor-by(-1);
+                        }
                         return accept;
                     }
                     if (event.text == Key.RightArrow) {
-                        root.move-cursor-by(1);
+                        if (event.modifiers.meta || event.modifiers.shift || event.modifiers.control) {
+                            // ⌘ + →
+                            root.move-cursor-by(10);
+                        } else {
+                            // →
+                            root.move-cursor-by(1);
+                        }
+                        return accept;
+                    }
+                    if (event.text == Key.UpArrow) {
+                        root.scale-up();
+                        return accept;
+                    }
+                    if (event.text == Key.DownArrow) {
+                        root.scale-down();
                         return accept;
                     }
                     return reject;
