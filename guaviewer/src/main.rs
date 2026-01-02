@@ -81,7 +81,7 @@ fn svg_to_image_with_scale(svg_content: &str, scale: f32) -> Result<Image, AppEr
 
     let size = tree.size();
     let width = (size.width() * scale) as u32;
-    let height = (size.height() * scale) as u32;
+    let height = (size.height() * 1.0f32) as u32;
 
     if width == 0 || height == 0 {
         // return Err("SVG produced an empty image".to_string());
@@ -93,7 +93,7 @@ fn svg_to_image_with_scale(svg_content: &str, scale: f32) -> Result<Image, AppEr
     let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or(AppError::PixmapAllocFailed)?;
 
     // Apply scaling transform
-    let transform = tiny_skia::Transform::from_scale(scale, scale);
+    let transform = tiny_skia::Transform::from_scale(scale, 1.0f32);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
     // resvg outputs premultiplied BGRA; Slint expects RGBA
@@ -318,6 +318,7 @@ fn render_svg_candles_full(candles: &[Candle], width: i32, height: i32) -> Strin
 
     // Price grid
     let grid_lines = 5;
+    let price_prec = auto_price_precision(min_price, max_price, (grid_lines as usize) + 1);
     for i in 0..=grid_lines {
         let t = i as f64 / grid_lines as f64;
         let price = max_price - t * price_range;
@@ -331,13 +332,13 @@ fn render_svg_candles_full(candles: &[Candle], width: i32, height: i32) -> Strin
             y = y,
             color = "#eee"
         ));
-
         // 2. Second Line
+        let price_label = fmt_price(price, price_prec);
         out.push_str(&format!(
-            r#"<text x="{tx:.2}" y="{ty:.2}" font-size="11" text-anchor="end" fill="{color}">{price:.2}</text>"#,
+            r#"<text x="{tx:.2}" y="{ty:.2}" font-size="11" text-anchor="end" fill="{color}">{label}</text>"#,
             tx = pad_left - 8.0,
             ty = y + 4.0,
-            price = price,
+            label = price_label,
             color = "#666"
         ));
     }
@@ -630,4 +631,38 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_current_scale("Scale: 1.0x".into());
 
     ui.run()
+}
+/// Decide how many decimal places to show for prices based on the visible range.
+///
+/// This keeps labels readable across instruments:
+/// - Large price ranges => fewer decimals
+/// - Small price ranges => more decimals
+fn auto_price_precision(min_price: f64, max_price: f64, tick_count: usize) -> usize {
+    let ticks = tick_count.max(2) as f64;
+    let range = (max_price - min_price).abs().max(1e-12);
+    let step = (range / (ticks - 1.0)).abs().max(1e-12);
+
+    // If the step between adjacent grid labels is:
+    // - >= 1  => 0 decimals (e.g. 123, 45)
+    // - <  1  => decimals based on step order of magnitude (e.g. 0.5 => 1, 0.05 => 2)
+    let mut prec: i32 = if step >= 1.0 {
+        0
+    } else {
+        // step in (0,1): log10 is negative
+        let p = -step.log10().floor();
+        p as i32
+    };
+
+    // Cap to a reasonable precision so SVG text doesn't get noisy.
+    if prec < 0 {
+        prec = 0;
+    }
+    if prec > 6 {
+        prec = 6;
+    }
+    prec as usize
+}
+
+fn fmt_price(price: f64, precision: usize) -> String {
+    format!("{:.*}", precision, price)
 }
