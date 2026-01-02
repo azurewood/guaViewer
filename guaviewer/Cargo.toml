@@ -1,9 +1,10 @@
 [package]
 name = "guaviewer"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2024"
 
 [dependencies]
+fontdb = "0.23.0"
 resvg = "0.45.1"
 slint = "1.14.1"
 tcptdx = {path = "../tcptdx"}
