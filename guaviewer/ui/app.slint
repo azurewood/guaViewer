@@ -42,7 +42,7 @@ component ToolTipArea {
 export component AppWindow inherits Window {
     title: "Gua KLine Viewer";
     width: 1000px;
-    height: 900px;
+    height: 800px;
 
     in-out property <image> svg-image;
     in-out property <string> current-scale: "Scale: 1.0x";
@@ -75,7 +75,9 @@ export component AppWindow inherits Window {
     }
 
     VerticalBox {
-        padding: 20px;
+        // padding: 20px;
+        padding-left: 20px;
+        padding-right: 20px;
         spacing: 15px;
 
         Text {
@@ -227,7 +229,7 @@ export component AppWindow inherits Window {
         // Image Display Area
         Rectangle {
             border-radius: 8px;
-            border-width: 2px;
+            border-width: 0px;
             border-color: #ddd;
             background: #f9f9f9;
             min-height: 300px;

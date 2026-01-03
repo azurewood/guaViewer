@@ -1,59 +1,15 @@
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 use std::cell::RefCell;
-use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::mpsc;
+use std::thread;
 
 // tcptdx library types (ensure your Cargo.toml includes the tcptdx crate)
+use guaviewer::model::{AppError, Candle, Cursor, FetchRequest, FetchResult};
 use tcptdx::{client::FeedClient, commands::KLine};
 
 slint::include_modules!();
-
-/// Application-level errors with structured variants.
-///
-/// This keeps error handling explicit and avoids passing around ad-hoc `String`s.
-/// In UI code we format these errors via `Display` and show them in `svg-status`.
-#[derive(Debug)]
-enum AppError {
-    /// A user input field could not be parsed into the expected type.
-    ParseU16 { field: &'static str, value: String },
-
-    /// The SVG string could not be parsed by `usvg`.
-    InvalidSvg { message: String },
-
-    /// The SVG produced a zero-sized output (width or height became 0).
-    EmptySvgImage,
-
-    /// Failed to allocate the raster pixmap buffer.
-    PixmapAllocFailed,
-
-    /// Failed to initialize the TCP TDX client.
-    ClientInit { message: String },
-
-    /// Failed to fetch KLine data over the network.
-    FetchKLine { message: String },
-
-    /// The server returned no data for the given query.
-    NoKLineData,
-}
-
-impl fmt::Display for AppError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AppError::ParseU16 { field, value } => {
-                write!(f, "{field} must be a u16 (got '{value}')")
-            }
-            AppError::InvalidSvg { message } => write!(f, "Invalid SVG: {message}"),
-            AppError::EmptySvgImage => write!(f, "SVG produced an empty image"),
-            AppError::PixmapAllocFailed => write!(f, "Failed to allocate pixmap buffer"),
-            AppError::ClientInit { message } => write!(f, "FeedClient init failed: {message}"),
-            AppError::FetchKLine { message } => write!(f, "KLine fetch failed: {message}"),
-            AppError::NoKLineData => write!(f, "No KLine data returned"),
-        }
-    }
-}
-
-impl std::error::Error for AppError {}
 
 /// Parse a `u16` from a Slint string field.
 ///
@@ -64,6 +20,30 @@ fn parse_u16(field: &'static str, text: slint::SharedString) -> Result<u16, AppE
         field,
         value: text.to_string(),
     })
+}
+
+/// Validate stock code input.
+///
+/// Rules:
+/// - trimmed
+/// - exactly 6 characters
+/// - digits only (0-9)
+fn validate_code(raw: &str) -> Result<String, AppError> {
+    let code = raw.trim();
+
+    if code.len() != 6 {
+        return Err(AppError::InvalidInput {
+            message: "code must be exactly 6 digits (e.g. 000001)".into(),
+        });
+    }
+
+    if !code.chars().all(|c| c.is_ascii_digit()) {
+        return Err(AppError::InvalidInput {
+            message: "code must contain digits only (0–9)".into(),
+        });
+    }
+
+    Ok(code.to_string())
 }
 
 /// Convert an SVG string into a raster `slint::Image` using the provided scale factor.
@@ -123,26 +103,6 @@ fn svg_to_image_with_scale(svg_content: &str, scale: f32) -> Result<Image, AppEr
 /// `position_x` is currently ignored because panning is handled at the UI layer.
 fn render_svg_to_image(svg_content: &str, scale: f32, _position_x: f32) -> Result<Image, AppError> {
     svg_to_image_with_scale(svg_content, scale)
-}
-
-/// A minimal candle model used by the SVG renderer.
-#[derive(Debug, Clone)]
-struct Candle {
-    open: f64,
-    high: f64,
-    low: f64,
-    close: f64,
-    volume: f64,
-    /// Render-friendly date label (already formatted).
-    label: String,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Cursor {
-    /// Nearest candle index (snapped on click).
-    idx: usize,
-    /// Cursor price at the click Y position (mapped from screen Y to price).
-    price: f64,
 }
 
 /// Fetch KLine data from tcptdx and convert it into candles.
@@ -756,6 +716,10 @@ fn render_svg_candles_full(candles: &[Candle], width: i32, height: i32) -> Strin
 fn main() -> Result<(), slint::PlatformError> {
     let ui = AppWindow::new()?;
 
+    // Channels to be used by worker thread
+    let (tx_req, rx_req) = mpsc::channel::<FetchRequest>();
+    let (tx_res, rx_res) = mpsc::channel::<FetchResult>();
+
     // Store current scale, position, and SVG content (so zoom/pan can re-render consistently).
     let scale = Rc::new(RefCell::new(1.0f32));
     let position_x = Rc::new(RefCell::new(0.0f32));
@@ -770,16 +734,17 @@ fn main() -> Result<(), slint::PlatformError> {
     // Reload / Refresh: fetch KLine -> render SVG -> rasterize -> show
     {
         let ui_weak = ui.as_weak();
-        let scale = scale.clone();
-        let current_svg_content = current_svg_content.clone();
-        let current_candles = current_candles.clone();
-        let cursor = cursor.clone();
-        let last_full_render = last_full_render.clone();
+        // let scale = scale.clone();
+        // let current_svg_content = current_svg_content.clone();
+        // let current_candles = current_candles.clone();
+        // let cursor = cursor.clone();
+        // let last_full_render = last_full_render.clone();
 
         ui.on_reload_kline(move || {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
+            ui.set_svg_status("Loading…".into());
 
             // Parse inputs
             let market = match parse_u16("market", ui.get_market_input()) {
@@ -790,11 +755,18 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
             };
 
-            let code = ui.get_code_input().to_string();
-            if code.len() != 6 {
-                ui.set_svg_status("Error: code must be 6 characters (e.g. 000001)".into());
-                return;
-            }
+            // let code = ui.get_code_input().to_string();
+            // if code.len() != 6 {
+            //     ui.set_svg_status("Error: code must be 6 characters (e.g. 000001)".into());
+            //     return;
+            // }
+            let code = match validate_code(&ui.get_code_input()) {
+                Ok(v) => v,
+                Err(e) => {
+                    ui.set_svg_status(format!("Error: {e}").into());
+                    return;
+                }
+            };
 
             let category = match parse_u16("category", ui.get_category_input()) {
                 Ok(v) => v,
@@ -823,40 +795,47 @@ fn main() -> Result<(), slint::PlatformError> {
             // Enforce protocol limit (tcptdx typically caps at 800)
             let count = count.min(800);
 
-            // Fetch
-            let candles = match fetch_kline_as_candles(market, &code, category, start, count) {
-                Ok(c) => c,
-                Err(e) => {
-                    ui.set_svg_status(format!("Error: {e}").into());
-                    return;
-                }
-            };
+            // // Fetch
+            // let candles = match fetch_kline_as_candles(market, &code, category, start, count) {
+            //     Ok(c) => c,
+            //     Err(e) => {
+            //         ui.set_svg_status(format!("Error: {e}").into());
+            //         return;
+            //     }
+            // };
+            let _ = tx_req.send(FetchRequest {
+                market,
+                code,
+                category,
+                start,
+                count,
+            });
 
-            // Render SVG
-            let full_render = ui.get_full_render();
-            *last_full_render.borrow_mut() = full_render;
-            *current_candles.borrow_mut() = candles.clone();
-            // Reset cursor on reload.
-            *cursor.borrow_mut() = None;
+            // // Render SVG
+            // let full_render = ui.get_full_render();
+            // *last_full_render.borrow_mut() = full_render;
+            // *current_candles.borrow_mut() = candles.clone();
+            // // Reset cursor on reload.
+            // *cursor.borrow_mut() = None;
 
-            let svg_w = 960;
-            let svg_h = if full_render { 520 } else { 420 };
-            let svg = render_svg_with_cursor(&candles, svg_w, svg_h, full_render, *cursor.borrow());
+            // let svg_w = 960;
+            // let svg_h = if full_render { 520 } else { 420 };
+            // let svg = render_svg_with_cursor(&candles, svg_w, svg_h, full_render, *cursor.borrow());
 
-            // Store the SVG so zoom can re-render at the new scale
-            *current_svg_content.borrow_mut() = svg;
+            // // Store the SVG so zoom can re-render at the new scale
+            // *current_svg_content.borrow_mut() = svg;
 
-            // Rasterize at current scale and show
-            let current_scale = *scale.borrow();
-            match svg_to_image_with_scale(&current_svg_content.borrow(), current_scale) {
-                Ok(image) => {
-                    ui.set_svg_image(image);
-                    ui.set_svg_status(format!("Loaded {} candles", candles.len()).into());
-                }
-                Err(e) => {
-                    ui.set_svg_status(format!("Error: {e}").into());
-                }
-            }
+            // // Rasterize at current scale and show
+            // let current_scale = *scale.borrow();
+            // match svg_to_image_with_scale(&current_svg_content.borrow(), current_scale) {
+            //     Ok(image) => {
+            //         ui.set_svg_image(image);
+            //         ui.set_svg_status(format!("Loaded {} candles", candles.len()).into());
+            //     }
+            //     Err(e) => {
+            //         ui.set_svg_status(format!("Error: {e}").into());
+            //     }
+            // }
         });
     }
 
@@ -1118,5 +1097,143 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
+    // Deliver results back to UI thread
+    // Slint must be updated on the UI thread.
+    // Use a timer or event loop hook:
+
+    let ui_weak = ui.as_weak();
+
+    // IMPORTANT: keep this variable alive
+    let res_timer = slint::Timer::default();
+    res_timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(50),
+        move || {
+            if let Ok(result) = rx_res.try_recv() {
+                // println!("{:?}", result);
+                if let Some(ui) = ui_weak.upgrade() {
+                    match result {
+                        FetchResult::Ok(candles) => {
+                            let scale = scale.clone();
+                            let current_svg_content = current_svg_content.clone();
+                            let current_candles = current_candles.clone();
+                            let cursor = cursor.clone();
+                            let last_full_render = last_full_render.clone();
+                            // ui.set_svg_content(svg.into());
+                            //
+                            // Render SVG
+                            let full_render = ui.get_full_render();
+                            *last_full_render.borrow_mut() = full_render;
+                            *current_candles.borrow_mut() = candles.clone();
+                            // Reset cursor on reload.
+                            *cursor.borrow_mut() = None;
+
+                            let svg_w = 960;
+                            let svg_h = if full_render { 520 } else { 420 };
+                            let svg = render_svg_with_cursor(
+                                &candles,
+                                svg_w,
+                                svg_h,
+                                full_render,
+                                *cursor.borrow(),
+                            );
+
+                            // Store the SVG so zoom can re-render at the new scale
+                            *current_svg_content.borrow_mut() = svg;
+
+                            // Rasterize at current scale and show
+                            let current_scale = *scale.borrow();
+                            match svg_to_image_with_scale(
+                                &current_svg_content.borrow(),
+                                current_scale,
+                            ) {
+                                Ok(image) => {
+                                    ui.set_svg_image(image);
+                                    ui.set_svg_status(
+                                        format!("Loaded {} candles", candles.len()).into(),
+                                    );
+                                }
+                                Err(e) => {
+                                    ui.set_svg_status(format!("Error: {e}").into());
+                                }
+                            }
+                            ui.set_svg_status("OK".into());
+                        }
+                        FetchResult::Err(e) => {
+                            ui.set_svg_status(format!("Error: {e}").into());
+                        }
+                    }
+                }
+            }
+        },
+    );
+
+    // Spawn background worker thread
+    thread::spawn(move || {
+        while let Ok(req) = rx_req.recv() {
+            let result =
+                fetch_kline_as_candles(req.market, &req.code, req.category, req.start, req.count);
+
+            match result {
+                Ok(candles) => {
+                    // println!("{:?}", candles);
+                    let _ = tx_res.send(FetchResult::Ok(candles));
+                }
+                Err(e) => {
+                    let _ = tx_res.send(FetchResult::Err(e.to_string()));
+                }
+            }
+        }
+    });
+
     ui.run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Verify that Candle is Send
+    #[test]
+    fn candle_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<Candle>();
+    }
+
+    // Verify that Vec<Candle> is Send
+    #[test]
+    fn vec_candle_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<Vec<Candle>>();
+    }
+
+    #[test]
+    fn validate_code_accepts_valid_code() {
+        let code = validate_code("000001").unwrap();
+        assert_eq!(code, "000001");
+    }
+
+    #[test]
+    fn validate_code_trims_whitespace() {
+        let code = validate_code("  000001 \n").unwrap();
+        assert_eq!(code, "000001");
+    }
+
+    #[test]
+    fn validate_code_rejects_wrong_length() {
+        let err = validate_code("12345").unwrap_err();
+        assert!(err.to_string().contains("exactly 6"));
+    }
+
+    #[test]
+    fn validate_code_rejects_non_digits() {
+        let err = validate_code("12A001").unwrap_err();
+        assert!(err.to_string().contains("digits"));
+    }
+
+    #[test]
+    fn validate_code_rejects_empty_string() {
+        let err = validate_code("").unwrap_err();
+        assert!(err.to_string().contains("exactly 6"));
+    }
 }
