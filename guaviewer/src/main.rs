@@ -1180,7 +1180,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     let _ = tx_res.send(FetchResult::Ok(candles));
                 }
                 Err(e) => {
-                    let _ = tx_res.send(FetchResult::Err(e.to_string()));
+                    let _ = tx_res.send(FetchResult::Err(e));
                 }
             }
         }

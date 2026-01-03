@@ -33,7 +33,8 @@ pub struct FetchRequest {
 pub enum FetchResult {
     // Ok(String),  // SVG
     Ok(Vec<Candle>),
-    Err(String), // error message
+    // Err(String), // error message
+    Err(AppError),
 }
 
 /// Application-level errors with structured variants.
