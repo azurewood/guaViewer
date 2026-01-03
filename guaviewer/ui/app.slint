@@ -80,12 +80,12 @@ export component AppWindow inherits Window {
         padding-right: 20px;
         spacing: 15px;
 
-        Text {
-            text: "Gua KLine Viewer";
-            font-size: 20px;
-            font-weight: 600;
-            horizontal-alignment: center;
-        }
+        // Text {
+        //     text: "Gua KLine Viewer";
+        //     font-size: 20px;
+        //     font-weight: 600;
+        //     horizontal-alignment: center;
+        // }
 
         // KLine Query Section
         VerticalBox {
@@ -109,7 +109,7 @@ export component AppWindow inherits Window {
 
                 TextEdit {
                     width: 80px;
-                    height: 35px;
+                    height: 38px;
                     text <=> root.market-input;
                     placeholder-text: "0";
                 }
@@ -122,7 +122,7 @@ export component AppWindow inherits Window {
 
                 TextEdit {
                     width: 120px;
-                    height: 35px;
+                    height: 38px;
                     text <=> root.code-input;
                     placeholder-text: "000001";
                 }
@@ -135,7 +135,7 @@ export component AppWindow inherits Window {
 
                 TextEdit {
                     width: 80px;
-                    height: 35px;
+                    height: 38px;
                     text <=> root.category-input;
                     placeholder-text: "9";
                 }
@@ -166,7 +166,7 @@ export component AppWindow inherits Window {
 
                 TextEdit {
                     width: 80px;
-                    height: 35px;
+                    height: 38px;
                     text <=> root.start-input;
                     placeholder-text: "0";
                 }
@@ -179,7 +179,7 @@ export component AppWindow inherits Window {
 
                 TextEdit {
                     width: 80px;
-                    height: 35px;
+                    height: 38px;
                     text <=> root.count-input;
                     placeholder-text: "100";
                 }
