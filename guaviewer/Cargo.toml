@@ -1,15 +1,37 @@
 [package]
 name = "guaviewer"
-version = "0.3.0"
+version = "0.5.0"
 edition = "2024"
+
+[lib]
+name = "guaviewer"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "guaviewer-desktop"
+path = "src/main.rs"
 
 [dependencies]
 fontdb = "0.23.0"
 resvg = "0.45.1"
-slint = "1.14.1"
+# slint = "1.14.1"
+# Ensure the backend feature matches your Slint version
+slint = { version = "1.14.1", features = ["backend-android-activity-06"] }
 tcptdx = {path = "../tcptdx"}
 tiny-skia = "0.11.4"
 usvg = "0.45.1"
 
 [build-dependencies]
 slint-build = "1.14.1"
+
+# cargo-apk metadata
+[package.metadata.android]
+package = "com.azurewood.guaviewer"
+label = "guaViewer"
+android_version = 35
+target_sdk_version = 35
+min_sdk_version = 26
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
