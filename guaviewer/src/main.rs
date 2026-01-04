@@ -1,4 +1,4 @@
-mod app_run;
+use guaviewer::app_run;
 
 fn main() -> Result<(), slint::PlatformError> {
     app_run::run_app()
