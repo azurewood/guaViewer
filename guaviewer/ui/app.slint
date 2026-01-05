@@ -40,9 +40,11 @@ component ToolTipArea {
 }
 
 export component AppWindow inherits Window {
+    icon: @image-url("icon.png");
     title: "Gua KLine Viewer";
-    width: 1000px;
-    height: 800px;
+    preferred-width: 1000px;
+    preferred-height: 800px;
+    // full_screen: true; // For mobile devices
 
     in-out property <image> svg-image;
     in-out property <string> current-scale: "Scale: 1.0x";
@@ -228,6 +230,7 @@ export component AppWindow inherits Window {
 
         // Image Display Area
         Rectangle {
+            width: 960px;
             border-radius: 8px;
             border-width: 0px;
             border-color: #ddd;
