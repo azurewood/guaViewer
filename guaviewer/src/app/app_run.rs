@@ -1,15 +1,17 @@
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
-use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
+use std::{cell::RefCell, sync::Arc};
+// use usvg::{Options, fontdb};
 
 // tcptdx library types (ensure your Cargo.toml includes the tcptdx crate)
 use super::model::*;
 use tcptdx::{client::FeedClient, commands::KLine};
 // use std::fmt;
 
+// Bundle the font at compile time
+const MY_FONT_1: &[u8] = include_bytes!("../../assets/fonts/Roboto-Light.ttf");
 // /// A minimal candle model used by the SVG renderer.
 // #[derive(Debug, Clone)]
 // pub struct Candle {
@@ -142,14 +144,29 @@ fn validate_code(raw: &str) -> Result<String, AppError> {
 fn svg_to_image_with_scale(svg_content: &str, scale: f32) -> Result<Image, AppError> {
     // 1. Create and configure the font database first
     // println!("{}", scale);
-    let mut fontdb = fontdb::Database::new();
-    fontdb.load_system_fonts(); // Now we can call &mut methods safely
-
+    let mut fontdb = usvg::fontdb::Database::new();
+    // fontdb.load_system_fonts(); // Now we can call &mut methods safely
+    // Load the font from memory instead of the file system
+    fontdb.load_font_data(MY_FONT_1.to_vec());
+    // Debug: Print every font name usvg now knows about
+    // for face in fontdb.faces() {
+    //     println!(
+    //         "Loaded face: Family={:?}, PostScript={}",
+    //         face.families, face.post_script_name
+    //     );
+    // }
+    // Optional: Specify a fallback if the SVG uses a missing font
+    //fontdb.set_serif_family("sans-serif-thin");
     // 2. Initialize Options with the prepared fontdb
     let opt = usvg::Options {
         fontdb: Arc::new(fontdb),
         ..usvg::Options::default()
     };
+    // Attach the fontdb to usvg Options
+    // let mut opt = Options::default();
+    // In usvg 0.45+, fontdb is wrapped in an Arc-like structure internally
+    // opt.fontdb = fontdb.into();
+
     // let tree = usvg::Tree::from_data(svg_content.as_bytes(), &opt)
     //     .map_err(|e| format!("Invalid SVG: {e}"))?;
     let tree =
@@ -443,11 +460,11 @@ fn cursor_overlay_svg(
 
             <!-- Horizontal cursor price label (left of crossing) -->
             <rect x="{clx:.2}" y="{cly:.2}" width="{clw:.2}" height="{clh:.2}" rx="3" ry="3" fill="{c_white}" opacity="0.62" stroke="{c_border}" />
-            <text x="{cltx:.2}" y="{clty:.2}" font-size="11" text-anchor="end" fill="{c_text}">{cross}</text>
+            <text x="{cltx:.2}" y="{clty:.2}" font-size="11" text-anchor="end" fill="{c_text}" font-family="Roboto">{cross}</text>
 
             <!-- Candle OHLC + date (right side) -->
             <rect x="{ix:.2}" y="{iy:.2}" width="{iw:.2}" height="{ih:.2}" rx="4" ry="4" fill="{c_white}" opacity="0.72" stroke="{c_border}" />
-            <text x="{itx:.2}" y="{ity:.2}" font-size="12" text-anchor="end" fill="{c_text}" font-family="monospace">{tspans}</text>
+            <text x="{itx:.2}" y="{ity:.2}" font-size="12" text-anchor="end" fill="{c_text}" font-family="Roboto">{tspans}</text>
         </g>"#,
         x = x_center,
         y1 = y_top,

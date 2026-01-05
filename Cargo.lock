@@ -1859,7 +1859,6 @@ name = "guaviewer"
 version = "0.5.0"
 dependencies = [
  "embed-resource",
- "fontdb",
  "resvg",
  "slint",
  "slint-build",
