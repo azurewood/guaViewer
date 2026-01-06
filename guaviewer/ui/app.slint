@@ -1,4 +1,5 @@
 import { VerticalBox, HorizontalBox, Button, LineEdit, CheckBox } from "std-widgets.slint";
+import "../assets/fonts/Inter_28pt-Light.ttf";
 
 component ToolTipArea {
     in property <string> text;
@@ -45,6 +46,7 @@ export component AppWindow inherits Window {
     preferred-width: 1000px;
     preferred-height: 800px;
     // full_screen: true; // For mobile devices
+    default-font-family: "Inter 28pt";
 
     in-out property <image> svg-image;
     in-out property <string> current-scale: "Scale: 1.0x";
