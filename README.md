@@ -90,11 +90,11 @@ Choosing TCP over a Web API is a **deliberate architectural decision**, not an a
 | Feature / Project | Pytdx    | Rustdx (≥0.4)        | This Project       |
 | ----------------- | -------- | -------------------- | ------------------ |
 | Transport         | TCP      | Web API (Commercial) | TCP                |
-| IP Pooling        | ✅ Mature | ❌                    | ⚠️ In Progress     |
-| Failover          | ✅        | ❌                    | ⚠️ In Progress     |
+| IP Pooling        | ✅ Mature | ❌                    | ✅     |
+| Failover          | ✅        | ❌                    | ✅     |
 | Connection Pool   | ✅        | ❌                    | ✅                  |
 | Blocking API      | ✅        | ❌                    | ✅                  |
-| Async Dependency  | ❌        | ✅ (HTTP stack)       | ❌                  |
+| Async Dependency  | ❌        | ✅ (HTTP stack)       | ⚠️ (by design)      |
 | Vendor Lock-in    | ❌        | ✅                    | ❌                  |
 | Debuggability     | High     | Medium               | High               |
 | Production Scope  | Broad    | Broad                | Focused / Explicit |
@@ -107,7 +107,7 @@ Legend:
 
 ---
 
-## Current Status (v0.1.0)
+## Current Status (v0.5.0)
 
 **What works today:**
 
@@ -129,27 +129,30 @@ This release is intentionally **conservative in scope**.
 
 ---
 
-## Roadmap
+## Roadmap (along with tcpTDX library)
 
-### v0.2.x
+### v0.3.x
 
 * IP health scoring
 * Smarter retry strategy
 * Configurable timeout policies
 * Improved logging & metrics
 
-### v0.3.x
+### v0.4.x
 
-* Extended market data types (minute lines, quotes)
 * Batch request optimizations
 * Better backpressure handling
-* Optional persistence layer
+
+## v0.5.x
+
+* Android and Windows support
 
 ### Future (Non-Goals)
 
 * Replacing commercial Web APIs
 * Chasing maximum throughput at all costs
 * Abstracting away TCP semantics
+* Optional persistence layer
 
 ---
 
@@ -168,15 +171,3 @@ If you are comfortable with TCP, blocking I/O, and explicit failure handling, th
 ## License
 
 MIT
-
----
-
-If you want, next I can:
-
-* Add **architecture diagrams (conceptual)**
-* Write a **“Why not Tokio?”** section
-* Add **code examples** (FeedClient usage)
-* Prepare **CHANGELOG + migration notes**
-* Help you draft a **GitHub release announcement**
-
-Just tell me how far you want to take it 🚀
