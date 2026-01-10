@@ -1,45 +1,86 @@
-# China Stock Market Viewer
+<div align="center">
+  <img width="96" src="./guaviewer/assets/icons/icon_.png" alt="Project Icon">
+</div>
 
- > **Version:** v0.5.0
- 
- > **Status:** Experimental but usable
- 
- > **Language:** Rust
- 
- > **Transport:** TCP (TDX-compatible protocol)
+<h1 align="center">
+  China Stock Market Viewer
+</h1>
+
+<p align="center">
+  A lightweight TCP-based desktop market viewer built with Rust
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/version-v0.5.0-orange.svg">
+  <img src="https://img.shields.io/badge/language-Rust-orange.svg">
+  <img src="https://img.shields.io/badge/transport-TCP-blue.svg">
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgreen.svg">
+  <img src="https://img.shields.io/badge/license-MIT-blue.svg">
+</p>
+
+<p align="center">
+  <a href="https://slint.dev">
+    <img alt="Made with Slint" src="https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-light.svg" height="56">
+  </a>
+</p>
+
+<p align="center">
+  English | <a href="./README_zh.md">简体中文</a>
+</p>
+
+---
+
+## :pushpin: Brief
+
+**China Stock Market Viewer** is a lightweight, experimental-but-usable desktop application for viewing Chinese stock market data over a **direct TCP connection** using a **TDX-compatible protocol**.
+
+The project is built on top of a custom `FeedClient` derived from the original **Rustdx TCP implementation**, and is designed to validate whether **direct TCP market data access** remains viable, transparent, and controllable compared to modern commercial Web APIs.
+
+Unlike upstream Rustdx (≥ v0.4), which migrated to a commercial HTTP API, this project intentionally continues to explore the **Pytdx-style TCP model**, emphasizing correctness, observability, and explicit failure handling.
+
+---
+
+## :mag: Preview
+
+<div align="center">
+  <img src="guaviewer/assets/images/preview.png" alt="Application Preview">
+</div>
 
 ---
 
 ## Overview
 
-This project is a **lightweight TCP-based market viewing tool** built on top of a custom `FeedClient` derived from the original **Rustdx TCP implementation**.
+This project provides:
 
-While the upstream Rustdx project moved away from TCP in favor of a commercial Web API starting from v0.4, this project continues to explore and validate the feasibility of **direct TCP market data access**, inspired by the long-standing Pytdx ecosystem.
+- A **blocking, deterministic TCP client**
+- Explicit request/response decoding
+- A usable **desktop market viewer UI**
+- Thread-based concurrency without Tokio
+- Clear error propagation and failure visibility
 
-The tool is already **functional for real-world use** and has not exhibited fundamental transport or protocol-level issues so far.
+The tool is already functional for **real-world exploratory and research use**, and no fundamental protocol-level issues have been observed so far.
 
 ---
 
 ## Background
 
-Starting from **Rustdx v0.4**, the original author discontinued the TCP transport layer and migrated to a commercial Web API.
-The main reason cited was **IP instability** when connecting to upstream quote servers.
+Starting from **Rustdx v0.4**, the original project discontinued its TCP transport layer and adopted a commercial Web API, primarily due to **IP instability and operational complexity**.
 
-The original plan was to implement a Pytdx-like strategy, including:
+The original TCP roadmap included:
 
-* IP probing and health checks
-* Connection pooling
-* Automatic failover
+- IP probing and health checks  
+- Connection pooling  
+- Automatic failover  
 
-However, due to the operational complexity and long-term maintenance cost, this effort was eventually abandoned.
+However, these features were ultimately abandoned upstream due to long-term maintenance costs.
 
-Despite this shift, the earlier Rustdx codebase laid down a **very solid technical foundation**, including:
+Despite this, the early Rustdx TCP implementation established a **strong technical foundation**, including:
 
-* Well-defined binary protocol parsing
-* Clean data structures
-* Clear separation between transport, decoding, and domain logic
+- Well-structured binary protocol parsing  
+- Clean domain data models  
+- Clear separation of transport and decoding logic  
 
-This project builds upon that foundation and reintroduces a **carefully scoped TCP client**, focusing on correctness, observability, and simplicity.
+This project builds upon that foundation and reintroduces a **carefully scoped TCP client**, deliberately limiting scope to maintain clarity and robustness.
 
 ---
 
@@ -47,124 +88,106 @@ This project builds upon that foundation and reintroduces a **carefully scoped T
 
 ### Why TCP Instead of a Web API?
 
-Choosing TCP over a Web API is a **deliberate architectural decision**, not an attempt to compete with commercial data providers.
+This is a **deliberate architectural choice**, not an attempt to replace commercial data providers.
 
-#### 1. Transparency & Control
+**Key motivations:**
 
-* TCP exposes the **raw protocol and data flow**
-* No hidden throttling, opaque retry logic, or undocumented limits
-* Easier to reason about latency, failures, and retries
+1. **Transparency & Control**  
+   - Raw protocol visibility  
+   - No hidden throttling or opaque retries  
 
-#### 2. Architectural Simplicity
+2. **Architectural Simplicity**  
+   - No HTTP stacks or JSON parsing  
+   - Fewer dependencies, easier debugging  
 
-* No HTTP stacks, JSON parsing, or async frameworks required
-* Fewer dependencies
-* Easier to debug with packet inspection and logs
+3. **Pytdx-Proven Model**  
+   - TCP + IP pool + retry works in practice  
+   - Operational problems are manageable when scoped  
 
-#### 3. Pytdx-Proven Model
+4. **Vendor Independence**  
+   - No API keys or quotas  
+   - Suitable for private or offline use  
 
-* Pytdx has demonstrated that **TCP + IP pool + retry logic works**
-* Problems are operational, not theoretical
-* This project intentionally scopes the problem instead of overgeneralizing
+5. **Explicit Failure Handling**  
+   - Timeouts, reconnects, and backpressure are visible  
+   - Avoids silent degradation common in wrapped APIs  
 
-#### 4. Vendor Independence
-
-* No API keys
-* No usage quotas
-* No commercial lock-in
-* Suitable for research, offline analysis, and private deployments
-
-#### 5. Explicit Failure Handling
-
-* TCP failures are visible and explicit
-* Encourages correct handling of timeouts, reconnects, and backpressure
-* Avoids “silent degradation” common in wrapped Web APIs
-
-> **Trade-off acknowledged:** TCP requires more engineering discipline.
-> This project embraces that cost in exchange for clarity and control.
+> Trade-off acknowledged: TCP demands stricter engineering discipline.  
+> This project embraces that cost in exchange for control and clarity.
 
 ---
 
 ## Project Comparison
 
-| Feature / Project | Pytdx    | Rustdx (≥0.4)        | This Project       |
-| ----------------- | -------- | -------------------- | ------------------ |
-| Transport         | TCP      | Web API (Commercial) | TCP                |
-| IP Pooling        | ✅ Mature | ❌                    | ✅     |
-| Failover          | ✅        | ❌                    | ✅     |
-| Connection Pool   | ✅        | ❌                    | ✅                  |
-| Blocking API      | ✅        | ❌                    | ✅                  |
-| Async Dependency  | ❌        | ✅ (HTTP stack)       | ⚠️ (by design)      |
-| Vendor Lock-in    | ❌        | ✅                    | ❌                  |
-| Debuggability     | High     | Medium               | High               |
-| Production Scope  | Broad    | Broad                | Focused / Explicit |
+| Feature / Project | Pytdx | Rustdx (≥0.4) | This Project |
+|------------------|-------|---------------|--------------|
+| Transport        | TCP   | Web API       | TCP          |
+| IP Pooling       | ✅    | ❌            | ✅           |
+| Failover         | ✅    | ❌            | ✅           |
+| Connection Pool  | ✅    | ❌            | ✅           |
+| Blocking API     | ✅    | ❌            | ✅           |
+| Async Stack      | ❌    | ✅            | ⚠️ (by design) |
+| Vendor Lock-in   | ❌    | ✅            | ❌           |
+| Debuggability    | High  | Medium        | High         |
 
-Legend:
-
-* ✅ Implemented
-* ⚠️ Partial / evolving
-* ❌ Not present
+Legend:  
+✅ Implemented ⚠️ Partial ❌ Not present
 
 ---
 
 ## Current Status (v0.5.0)
 
-**What works today:**
+**What works:**
 
-* TCP-based `FeedClient`
-* Stable request / response decoding
-* K-line (candlestick) data fetching
-* Thread-based concurrency (no Tokio)
-* Usable market viewer UI
-* Explicit error propagation
-* Deterministic blocking behavior
+- TCP-based `FeedClient`
+- Stable protocol decoding
+- K-line (candlestick) data fetching
+- Thread-based concurrency
+- Desktop UI viewer
+- Deterministic blocking behavior
 
-**What this version is *not*:**
+**What this is not:**
 
-* A drop-in Rust replacement for Pytdx
-* A fully automated, self-healing data service
-* A commercial-grade market data platform
+- A drop-in Pytdx replacement  
+- A self-healing production data service  
+- A commercial market data platform  
 
-This release is intentionally **conservative in scope**.
+The scope is intentionally **conservative and explicit**.
 
 ---
 
-## Roadmap (along with tcpTDX library)
+## Roadmap
 
 ### v0.3.x
-
-* IP health scoring
-* Smarter retry strategy
-* Configurable timeout policies
-* Improved logging & metrics
+- IP health scoring  
+- Smarter retry strategies  
+- Configurable timeout policies  
+- Improved logging and metrics  
 
 ### v0.4.x
+- Batch request optimizations  
+- Improved backpressure handling  
 
-* Batch request optimizations
-* Better backpressure handling
+### v0.5.x
+- Android support  
+- Windows distribution improvements  
 
-## v0.5.x
-
-* Android and Windows support
-
-### Future (Non-Goals)
-
-* Replacing commercial Web APIs
-* Chasing maximum throughput at all costs
-* Abstracting away TCP semantics
-* Optional persistence layer
+### Non-Goals
+- Replacing commercial APIs  
+- Maximizing throughput at all costs  
+- Abstracting away TCP semantics  
 
 ---
 
 ## Philosophy
 
-This project values:
+This project prioritizes:
 
-* **Correctness over cleverness**
-* **Explicit behavior over hidden automation**
-* **Understandability over abstraction**
+- **Correctness over cleverness**
+- **Explicit behavior over hidden automation**
+- **Understandability over abstraction**
 
-If you are comfortable with TCP, blocking I/O, and explicit failure handling, this tool aims to give you **full visibility and control** over your market data pipeline.
+If you are comfortable with TCP, blocking I/O, and visible failure modes, this tool aims to give you **full control over your market data pipeline**.
 
 ---
 
