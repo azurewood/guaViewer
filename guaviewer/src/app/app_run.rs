@@ -796,7 +796,7 @@ fn render_svg_candles_full(candles: &[Candle], width: i32, height: i32) -> Strin
         let x_center = pad_left + (i as f64 + 0.5) * step;
         let text_y = h - 10.0;
         out.push_str(&format!(
-            r#"<text x="{x:.2}" y="{y:.2}" font-size="11" text-anchor="middle" fill="{color}">{label}</text>"#,
+            r#"<text x="{x:.2}" y="{y:.2}" font-size="11" text-anchor="middle" fill="{color}" font-family="Roboto">{label}</text>"#,
             x = x_center,
             y = text_y,
             color = "#666",
