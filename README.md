@@ -127,6 +127,7 @@ This is a **deliberate architectural choice**, not an attempt to replace commerc
 | Connection Pool  | ✅    | ❌            | ✅           |
 | Blocking API     | ✅    | ❌            | ✅           |
 | Async Stack      | ❌    | ✅            | ⚠️ (by design) |
+| Data Pipeline    | ❌    | ✅            | ✅ (built-in) |
 | Vendor Lock-in   | ❌    | ✅            | ❌           |
 | Debuggability    | High  | Medium        | High         |
 
